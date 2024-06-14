@@ -12,11 +12,12 @@ import { describeSuite, beforeAll, expect } from "@moonwall/cli";
 import { Signer } from "ethers";
 import { ApiPromise } from "@polkadot/api";
 import { rateLimiter } from "../../helpers/common.js";
+
 const timePeriod = process.env.TIME_PERIOD ? Number(process.env.TIME_PERIOD) : TWO_HOURS;
 const timeout = Math.floor(timePeriod / 12); // 2 hour -> 10 minute timeout
 
 describeSuite({
-  id: "S400",
+  id: "S04",
   title: "Parachain blocks should be finalized",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
@@ -24,8 +25,8 @@ describeSuite({
     let ethers: Signer;
 
     beforeAll(() => {
-      paraApi = context.polkadotJs({ apiName: "para" });
-      ethers = context.ethers();
+      paraApi = context.polkadotJs("para");
+      ethers = context.ethers()!;
     });
 
     it({
@@ -53,7 +54,7 @@ describeSuite({
           return; // TODO: replace with skip() when added to vitest
         }
 
-        const timestamp = (await ethers.provider.getBlock("finalized")).timestamp;
+        const timestamp = (await ethers.provider!.getBlock("finalized"))!.timestamp;
         const diff = Date.now() - timestamp * 1000;
         log(`Last finalized eth block was ${diff / 1000} seconds ago`);
         expect(diff).to.be.lessThanOrEqual(10 * 60 * 1000);

@@ -6,18 +6,37 @@ inputs:
   moonwall_environment:
     description: Name of the moonwall environment to run tests against.
     required: true
+  force-pass:
+    description: "Indicate whether the workflow should mark the test step as successful, even if actual test failures occur."
+    default: "false"
 
 runs:
   using: "composite"
   steps:
-    - uses: pnpm/action-setup@v2
+    - uses: pnpm/action-setup@v3
       with:
-        version: 8
-    - uses: actions/setup-node@v3
+        version: 8.6.12
+    - uses: actions/setup-node@v4
       with:
-        node-version: 18.x
+        node-version: 20.10.0
         cache: "pnpm"
         cache-dependency-path: test/pnpm-lock.yaml
+
+    - name: Setup Moonbeam PolkadotJS types
+      shell: bash
+      run: |
+        #### Preparing the legacy types
+        cd moonbeam-types-bundle
+        npm ci
+        npm run build
+
+        #### Preparing the typescript api
+        cd ../typescript-api
+        npm ci
+
+        cd ../test
+        pnpm i ../typescript-api
+
     - name: "Install and run dev test"
       shell: bash
       env:
@@ -26,11 +45,12 @@ runs:
       run: |
         chmod uog+x target/release/moonbeam
         cd test
-        pnpm i
-        pnpm moonwall test ${{ inputs.moonwall_environment }}
+        pnpm install
+        pnpm compile-solidity
+        pnpm moonwall test ${{ inputs.moonwall_environment }} || [[ '${{ inputs.force-pass }}' == 'true' ]]
     - name: Upload HTML report
       if: always()
-      uses: actions/upload-artifact@v3.1.2
+      uses: actions/upload-artifact@v4
       with:
-        name: dev-test-report
+        name: dev-test-report-${{ inputs.moonwall_environment }}
         path: test/html

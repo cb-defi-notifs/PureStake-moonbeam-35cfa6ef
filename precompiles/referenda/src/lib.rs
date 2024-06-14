@@ -17,10 +17,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use fp_evm::PrecompileHandle;
-use frame_support::dispatch::{Dispatchable, GetDispatchInfo, PostDispatchInfo};
+use frame_support::dispatch::{GetDispatchInfo, PostDispatchInfo};
 use frame_support::traits::{
 	schedule::DispatchTime, Bounded, Currency, Get, OriginTrait, VoteTally,
 };
+use frame_system::pallet_prelude::BlockNumberFor;
 use pallet_evm::AddressMapping;
 use pallet_referenda::{
 	Call as ReferendaCall, DecidingCount, Deposit, Pallet as Referenda, ReferendumCount,
@@ -29,6 +30,7 @@ use pallet_referenda::{
 use parity_scale_codec::{Encode, MaxEncodedLen};
 use precompile_utils::prelude::*;
 use sp_core::{H160, H256, U256};
+use sp_runtime::traits::Dispatchable;
 use sp_std::{boxed::Box, marker::PhantomData, str::FromStr, vec::Vec};
 
 #[cfg(test)]
@@ -43,9 +45,12 @@ type BalanceOf<Runtime> = <<Runtime as pallet_referenda::Config>::Currency as Cu
 >>::Balance;
 type TrackIdOf<Runtime> = <<Runtime as pallet_referenda::Config>::Tracks as TracksInfo<
 	BalanceOf<Runtime>,
-	<Runtime as frame_system::Config>::BlockNumber,
+	BlockNumberFor<Runtime>,
 >>::Id;
-type BoundedCallOf<Runtime> = Bounded<<Runtime as pallet_referenda::Config>::RuntimeCall>;
+type BoundedCallOf<Runtime> = Bounded<
+	<Runtime as pallet_referenda::Config>::RuntimeCall,
+	<Runtime as frame_system::Config>::Hashing,
+>;
 
 type OriginOf<Runtime> =
 	<<Runtime as frame_system::Config>::RuntimeOrigin as OriginTrait>::PalletsOrigin;
@@ -141,7 +146,7 @@ where
 		From<Option<Runtime::AccountId>>,
 	<Runtime as frame_system::Config>::RuntimeCall: From<ReferendaCall<Runtime>>,
 	<Runtime as frame_system::Config>::Hash: Into<H256>,
-	Runtime::BlockNumber: Into<U256>,
+	BlockNumberFor<Runtime>: Into<U256>,
 	Runtime::AccountId: Into<H160>,
 	TrackIdOf<Runtime>: TryFrom<u16> + TryInto<u16>,
 	BalanceOf<Runtime>: Into<U256>,
@@ -259,11 +264,11 @@ where
 		handle: &mut impl PrecompileHandle,
 		track_id: u16,
 		proposal: BoundedCallOf<Runtime>,
-		enactment_moment: DispatchTime<Runtime::BlockNumber>,
+		enactment_moment: DispatchTime<BlockNumberFor<Runtime>>,
 	) -> EvmResult<u32> {
 		log::trace!(
 			target: "referendum-precompile",
-			"Submitting proposal {} [len: {:?}] to track {}",
+			"Submitting proposal {:?} [len: {:?}] to track {}",
 			proposal.hash(),
 			proposal.len(),
 			track_id
@@ -287,7 +292,7 @@ where
 		}
 		.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(referendum_index)
 	}
@@ -402,7 +407,7 @@ where
 
 		let get_closed_ref_info =
 			|status,
-			 moment: Runtime::BlockNumber,
+			 moment: BlockNumberFor<Runtime>,
 			 submission_deposit: Option<Deposit<Runtime::AccountId, BalanceOf<Runtime>>>,
 			 decision_deposit: Option<Deposit<Runtime::AccountId, BalanceOf<Runtime>>>|
 			 -> ClosedReferendumInfo {
@@ -486,7 +491,7 @@ where
 		block_number: u32,
 	) -> EvmResult<u32> {
 		let proposal: BoundedCallOf<Runtime> = Bounded::Lookup {
-			hash: proposal_hash,
+			hash: proposal_hash.into(),
 			len: proposal_len,
 		};
 		handle.record_log_costs_manual(2, 32 * 2)?;
@@ -524,7 +529,7 @@ where
 		block_number: u32,
 	) -> EvmResult<u32> {
 		let proposal: BoundedCallOf<Runtime> = Bounded::Lookup {
-			hash: proposal_hash,
+			hash: proposal_hash.into(),
 			len: proposal_len,
 		};
 		handle.record_log_costs_manual(2, 32 * 2)?;
@@ -563,7 +568,7 @@ where
 
 		let call = ReferendaCall::<Runtime>::place_decision_deposit { index }.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		// Once the deposit has been succesfully placed, it is available in the ReferendumStatus.
 		let ongoing_referendum = Referenda::<Runtime>::ensure_ongoing(index).map_err(|_| {
@@ -616,7 +621,7 @@ where
 
 		let call = ReferendaCall::<Runtime>::refund_decision_deposit { index }.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 		let event = log1(
 			handle.context().address,
 			SELECTOR_LOG_DECISION_DEPOSIT_REFUNDED,
@@ -652,7 +657,7 @@ where
 
 		let call = ReferendaCall::<Runtime>::refund_submission_deposit { index }.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		let event = log1(
 			handle.context().address,

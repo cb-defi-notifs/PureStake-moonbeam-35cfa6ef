@@ -24,8 +24,9 @@ mod tests {
 	use super::common::*;
 
 	use pallet_evm::AddressMapping;
-	use sp_core::H160;
+	use sp_core::{H160, U256};
 
+	use moonbeam_core_primitives::Header;
 	use moonbeam_rpc_primitives_debug::runtime_decl_for_debug_runtime_api::DebugRuntimeApi;
 	use std::str::FromStr;
 
@@ -44,7 +45,7 @@ mod tests {
 			.build()
 			.execute_with(|| {
 				let non_eth_uxt = UncheckedExtrinsic::new_unsigned(
-					pallet_balances::Call::<Runtime>::transfer {
+					pallet_balances::Call::<Runtime>::transfer_allow_death {
 						dest: AccountId::from(BOB),
 						value: 1 * MOVR,
 					}
@@ -52,9 +53,17 @@ mod tests {
 				);
 				let transaction = ethereum_transaction(VALID_ETH_TX);
 				let eth_uxt = unchecked_eth_tx(VALID_ETH_TX);
+				let block = Header {
+					digest: Default::default(),
+					extrinsics_root: Default::default(),
+					number: 1,
+					parent_hash: Default::default(),
+					state_root: Default::default(),
+				};
 				assert!(Runtime::trace_transaction(
 					vec![non_eth_uxt.clone(), eth_uxt, non_eth_uxt.clone()],
-					&transaction
+					&transaction,
+					&block
 				)
 				.is_ok());
 			});
@@ -75,7 +84,7 @@ mod tests {
 			.build()
 			.execute_with(|| {
 				let non_eth_uxt = UncheckedExtrinsic::new_unsigned(
-					pallet_balances::Call::<Runtime>::transfer {
+					pallet_balances::Call::<Runtime>::transfer_allow_death {
 						dest: AccountId::from(BOB),
 						value: 1 * MOVR,
 					}
@@ -84,9 +93,50 @@ mod tests {
 				let eth_uxt = unchecked_eth_tx(VALID_ETH_TX);
 				let eth_tx = ethereum_transaction(VALID_ETH_TX);
 				let eth_extrinsic_hash = eth_tx.hash();
+				let block = Header {
+					digest: Default::default(),
+					extrinsics_root: Default::default(),
+					number: 1,
+					parent_hash: Default::default(),
+					state_root: Default::default(),
+				};
 				assert!(Runtime::trace_block(
 					vec![non_eth_uxt.clone(), eth_uxt.clone(), non_eth_uxt, eth_uxt],
-					vec![eth_extrinsic_hash, eth_extrinsic_hash]
+					vec![eth_extrinsic_hash, eth_extrinsic_hash],
+					&block
+				)
+				.is_ok());
+			});
+	}
+
+	#[test]
+	fn debug_runtime_api_trace_call() {
+		let block = Header {
+			digest: Default::default(),
+			extrinsics_root: Default::default(),
+			number: 1,
+			parent_hash: Default::default(),
+			state_root: Default::default(),
+		};
+		let alith = H160::from_str("6be02d1d3665660d22ff9624b7be0551ee1ac91b")
+			.expect("internal H160 is valid; qed");
+		let alith_account_id =
+			<Runtime as pallet_evm::Config>::AddressMapping::into_account_id(alith);
+		ExtBuilder::default()
+			.with_balances(vec![(alith_account_id, 100 * MOVR)])
+			.build()
+			.execute_with(|| {
+				assert!(Runtime::trace_call(
+					&block,
+					alith,
+					H160::random(),
+					Vec::new(),
+					U256::from(99),
+					U256::max_value(),
+					Some(U256::one()),
+					Some(U256::one()),
+					None,
+					None,
 				)
 				.is_ok());
 			});

@@ -16,28 +16,37 @@
 
 //! Helper methods for computing issuance based on inflation
 use crate::pallet::{BalanceOf, Config, Pallet};
-use frame_support::traits::Currency;
+use frame_support::traits::{Currency, Get};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 use sp_runtime::PerThing;
 use sp_runtime::{Perbill, RuntimeDebug};
 use substrate_fixed::transcendental::pow as floatpow;
 use substrate_fixed::types::I64F64;
 
-const SECONDS_PER_YEAR: u32 = 31557600;
-const SECONDS_PER_BLOCK: u32 = 12;
-pub const BLOCKS_PER_YEAR: u32 = SECONDS_PER_YEAR / SECONDS_PER_BLOCK;
+// Milliseconds per year
+const MS_PER_YEAR: u64 = 31_557_600_000;
 
 fn rounds_per_year<T: Config>() -> u32 {
-	let blocks_per_round = <Pallet<T>>::round().length;
-	BLOCKS_PER_YEAR / blocks_per_round
+	let blocks_per_round = <Pallet<T>>::round().length as u64;
+	let blocks_per_year = MS_PER_YEAR / T::BlockTime::get();
+	(blocks_per_year / blocks_per_round) as u32
 }
 
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 #[derive(
-	Eq, PartialEq, Clone, Copy, Encode, Decode, Default, RuntimeDebug, MaxEncodedLen, TypeInfo,
+	Eq,
+	PartialEq,
+	Clone,
+	Copy,
+	Encode,
+	Decode,
+	Default,
+	Deserialize,
+	RuntimeDebug,
+	MaxEncodedLen,
+	Serialize,
+	TypeInfo,
 )]
 pub struct Range<T> {
 	pub min: T,
@@ -99,8 +108,9 @@ pub fn round_issuance_range<T: Config>(round: Range<Perbill>) -> Range<BalanceOf
 	}
 }
 
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-#[derive(Eq, PartialEq, Clone, Encode, Decode, Default, RuntimeDebug, TypeInfo)]
+#[derive(
+	Eq, PartialEq, Clone, Encode, Decode, Default, Deserialize, RuntimeDebug, Serialize, TypeInfo,
+)]
 pub struct InflationInfo<Balance> {
 	/// Staking expectations
 	pub expect: Range<Balance>,
@@ -126,9 +136,9 @@ impl<Balance> InflationInfo<Balance> {
 		self.round = annual_to_round::<T>(new);
 	}
 	/// Reset round inflation rate based on changes to round length
-	pub fn reset_round(&mut self, new_length: u32) {
-		let periods = BLOCKS_PER_YEAR / new_length;
-		self.round = perbill_annual_to_perbill_round(self.annual, periods);
+	pub fn reset_round<T: Config>(&mut self, new_length: u32) {
+		let periods = (MS_PER_YEAR / T::BlockTime::get()) / (new_length as u64);
+		self.round = perbill_annual_to_perbill_round(self.annual, periods as u32);
 	}
 	/// Set staking expectations
 	pub fn set_expectations(&mut self, expect: Range<Balance>) {

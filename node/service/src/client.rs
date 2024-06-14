@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with Moonbeam.  If not, see <http://www.gnu.org/licenses/>.
 pub use moonbeam_core_primitives::{AccountId, Balance, Block, BlockNumber, Hash, Header, Index};
-use sc_client_api::{Backend as BackendT, BlockchainEvents, KeysIter, PairsIter};
-use sp_api::{CallApiAt, NumberFor, ProvideRuntimeApi};
+use sc_client_api::{Backend as BackendT, BlockchainEvents, KeysIter, MerkleValue, PairsIter};
+use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_blockchain::HeaderBackend;
 use sp_consensus::BlockStatus;
 use sp_runtime::{
 	generic::SignedBlock,
-	traits::{BlakeTwo256, Block as BlockT},
+	traits::{BlakeTwo256, Block as BlockT, NumberFor},
 	Justifications,
 };
 use sp_storage::{ChildInfo, StorageData, StorageKey};
@@ -46,13 +46,11 @@ pub trait RuntimeApiCollection:
 	+ nimbus_primitives::NimbusApi<Block>
 	+ cumulus_primitives_core::CollectCollationInfo<Block>
 	+ session_keys_primitives::VrfApi<Block>
-where
-	<Self as sp_api::ApiExt<Block>>::StateBackend: sp_api::StateBackend<BlakeTwo256>,
+	+ async_backing_primitives::UnincludedSegmentApi<Block>
 {
 }
 
-impl<Api> RuntimeApiCollection for Api
-where
+impl<Api> RuntimeApiCollection for Api where
 	Api: sp_transaction_pool::runtime_api::TaggedTransactionQueue<Block>
 		+ sp_api::ApiExt<Block>
 		+ sp_block_builder::BlockBuilder<Block>
@@ -67,8 +65,8 @@ where
 		+ moonbeam_rpc_primitives_txpool::TxPoolRuntimeApi<Block>
 		+ nimbus_primitives::NimbusApi<Block>
 		+ cumulus_primitives_core::CollectCollationInfo<Block>
-		+ session_keys_primitives::VrfApi<Block>,
-	<Self as sp_api::ApiExt<Block>>::StateBackend: sp_api::StateBackend<BlakeTwo256>,
+		+ session_keys_primitives::VrfApi<Block>
+		+ async_backing_primitives::UnincludedSegmentApi<Block>
 {
 }
 
@@ -86,8 +84,8 @@ pub trait AbstractClient<Block, Backend>:
 where
 	Block: BlockT,
 	Backend: BackendT<Block>,
-	Backend::State: sp_api::StateBackend<BlakeTwo256>,
-	Self::Api: RuntimeApiCollection<StateBackend = Backend::State>,
+	Backend::State: sc_client_api::backend::StateBackend<BlakeTwo256>,
+	Self::Api: RuntimeApiCollection,
 {
 }
 
@@ -95,7 +93,7 @@ impl<Block, Backend, Client> AbstractClient<Block, Backend> for Client
 where
 	Block: BlockT,
 	Backend: BackendT<Block>,
-	Backend::State: sp_api::StateBackend<BlakeTwo256>,
+	Backend::State: sc_client_api::backend::StateBackend<BlakeTwo256>,
 	Client: BlockchainEvents<Block>
 		+ ProvideRuntimeApi<Block>
 		+ HeaderBackend<Block>
@@ -103,7 +101,7 @@ where
 		+ Send
 		+ Sync
 		+ CallApiAt<Block, StateBackend = Backend::State>,
-	Client::Api: RuntimeApiCollection<StateBackend = Backend::State>,
+	Client::Api: RuntimeApiCollection,
 {
 }
 
@@ -127,10 +125,9 @@ pub trait ExecuteWithClient {
 	/// Execute whatever should be executed with the given client instance.
 	fn execute_with_client<Client, Api, Backend>(self, client: Arc<Client>) -> Self::Output
 	where
-		<Api as sp_api::ApiExt<Block>>::StateBackend: sp_api::StateBackend<BlakeTwo256>,
 		Backend: sc_client_api::Backend<Block>,
-		Backend::State: sp_api::StateBackend<BlakeTwo256>,
-		Api: crate::RuntimeApiCollection<StateBackend = Backend::State>,
+		Backend::State: sc_client_api::backend::StateBackend<BlakeTwo256>,
+		Api: crate::RuntimeApiCollection,
 		Client: AbstractClient<Block, Backend, Api = Api> + 'static;
 }
 
@@ -150,42 +147,30 @@ pub trait ClientHandle {
 #[derive(Clone)]
 pub enum Client {
 	#[cfg(feature = "moonbeam-native")]
-	Moonbeam(Arc<crate::FullClient<moonbeam_runtime::RuntimeApi, crate::MoonbeamExecutor>>),
+	Moonbeam(Arc<crate::FullClient<moonbeam_runtime::RuntimeApi>>),
 	#[cfg(feature = "moonriver-native")]
-	Moonriver(Arc<crate::FullClient<moonriver_runtime::RuntimeApi, crate::MoonriverExecutor>>),
+	Moonriver(Arc<crate::FullClient<moonriver_runtime::RuntimeApi>>),
 	#[cfg(feature = "moonbase-native")]
-	Moonbase(Arc<crate::FullClient<moonbase_runtime::RuntimeApi, crate::MoonbaseExecutor>>),
+	Moonbase(Arc<crate::FullClient<moonbase_runtime::RuntimeApi>>),
 }
 
 #[cfg(feature = "moonbeam-native")]
-impl From<Arc<crate::FullClient<moonbeam_runtime::RuntimeApi, crate::MoonbeamExecutor>>>
-	for Client
-{
-	fn from(
-		client: Arc<crate::FullClient<moonbeam_runtime::RuntimeApi, crate::MoonbeamExecutor>>,
-	) -> Self {
+impl From<Arc<crate::FullClient<moonbeam_runtime::RuntimeApi>>> for Client {
+	fn from(client: Arc<crate::FullClient<moonbeam_runtime::RuntimeApi>>) -> Self {
 		Self::Moonbeam(client)
 	}
 }
 
 #[cfg(feature = "moonriver-native")]
-impl From<Arc<crate::FullClient<moonriver_runtime::RuntimeApi, crate::MoonriverExecutor>>>
-	for Client
-{
-	fn from(
-		client: Arc<crate::FullClient<moonriver_runtime::RuntimeApi, crate::MoonriverExecutor>>,
-	) -> Self {
+impl From<Arc<crate::FullClient<moonriver_runtime::RuntimeApi>>> for Client {
+	fn from(client: Arc<crate::FullClient<moonriver_runtime::RuntimeApi>>) -> Self {
 		Self::Moonriver(client)
 	}
 }
 
 #[cfg(feature = "moonbase-native")]
-impl From<Arc<crate::FullClient<moonbase_runtime::RuntimeApi, crate::MoonbaseExecutor>>>
-	for Client
-{
-	fn from(
-		client: Arc<crate::FullClient<moonbase_runtime::RuntimeApi, crate::MoonbaseExecutor>>,
-	) -> Self {
+impl From<Arc<crate::FullClient<moonbase_runtime::RuntimeApi>>> for Client {
+	fn from(client: Arc<crate::FullClient<moonbase_runtime::RuntimeApi>>) -> Self {
 		Self::Moonbase(client)
 	}
 }
@@ -351,6 +336,23 @@ impl sc_client_api::StorageProvider<Block, crate::FullBackend> for Client {
 		key: &StorageKey,
 	) -> sp_blockchain::Result<Option<<Block as BlockT>::Hash>> {
 		match_client!(self, child_storage_hash(hash, child_info, key))
+	}
+
+	fn closest_merkle_value(
+		&self,
+		hash: <Block as BlockT>::Hash,
+		key: &StorageKey,
+	) -> sp_blockchain::Result<Option<MerkleValue<<Block as BlockT>::Hash>>> {
+		match_client!(self, closest_merkle_value(hash, key))
+	}
+
+	fn child_closest_merkle_value(
+		&self,
+		hash: <Block as BlockT>::Hash,
+		child_info: &ChildInfo,
+		key: &StorageKey,
+	) -> sp_blockchain::Result<Option<MerkleValue<<Block as BlockT>::Hash>>> {
+		match_client!(self, child_closest_merkle_value(hash, child_info, key))
 	}
 }
 

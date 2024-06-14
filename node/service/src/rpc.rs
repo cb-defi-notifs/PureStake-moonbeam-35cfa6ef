@@ -24,11 +24,14 @@ use fp_rpc::EthereumRuntimeRPCApi;
 use sp_block_builder::BlockBuilder;
 
 use crate::client::RuntimeApiCollection;
-use cumulus_primitives_core::ParaId;
-use fc_mapping_sync::{MappingSyncWorker, SyncStrategy};
+use cumulus_primitives_core::{ParaId, PersistedValidationData};
+use cumulus_primitives_parachain_inherent::ParachainInherentData;
+use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
+use fc_mapping_sync::{kv::MappingSyncWorker, SyncStrategy};
 use fc_rpc::{
-	EthBlockDataCacheTask, EthTask, OverrideHandle, RuntimeApiStorageOverride, SchemaV1Override,
-	SchemaV2Override, SchemaV3Override, StorageOverride,
+	pending::ConsensusDataProvider, EthBlockDataCacheTask, EthTask, OverrideHandle,
+	RuntimeApiStorageOverride, SchemaV1Override, SchemaV2Override, SchemaV3Override,
+	StorageOverride,
 };
 use fc_rpc_core::types::{CallRequest, FeeHistoryCache, FilterPool};
 use fp_storage::EthereumStorageSchema;
@@ -49,12 +52,12 @@ use sc_rpc_api::DenyUnsafe;
 use sc_service::TaskManager;
 use sc_transaction_pool::{ChainApi, Pool};
 use sc_transaction_pool_api::TransactionPool;
-use sp_api::{CallApiAt, HeaderT, ProvideRuntimeApi};
+use sp_api::{CallApiAt, ProvideRuntimeApi};
 use sp_blockchain::{
 	Backend as BlockchainBackend, Error as BlockChainError, HeaderBackend, HeaderMetadata,
 };
 use sp_core::H256;
-use sp_runtime::traits::{BlakeTwo256, Block as BlockT};
+use sp_runtime::traits::{BlakeTwo256, Block as BlockT, Header as HeaderT};
 use std::collections::BTreeMap;
 
 pub struct MoonbeamEGA;
@@ -112,7 +115,7 @@ pub struct FullDeps<C, P, A: ChainApi, BE> {
 	/// The list of optional RPC extensions.
 	pub ethapi_cmd: Vec<EthApiCmd>,
 	/// Frontier Backend.
-	pub frontier_backend: Arc<fc_db::Backend<Block>>,
+	pub frontier_backend: Arc<dyn fc_api::Backend<Block>>,
 	/// Backend.
 	pub backend: Arc<BE>,
 	/// Manual seal command sink
@@ -176,6 +179,7 @@ pub fn create_full<C, P, BE, A>(
 			fc_mapping_sync::EthereumBlockNotification<Block>,
 		>,
 	>,
+	pending_consenus_data_provider: Box<dyn ConsensusDataProvider<Block>>,
 ) -> Result<RpcModule<()>, Box<dyn std::error::Error + Send + Sync>>
 where
 	BE: Backend<Block> + 'static,
@@ -187,7 +191,7 @@ where
 	C: CallApiAt<Block>,
 	C: Send + Sync + 'static,
 	A: ChainApi<Block = Block> + 'static,
-	C::Api: RuntimeApiCollection<StateBackend = BE::State>,
+	C::Api: RuntimeApiCollection,
 	P: TransactionPool<Block = Block> + 'static,
 {
 	use fc_rpc::{
@@ -242,8 +246,31 @@ where
 	}
 	let convert_transaction: Option<Never> = None;
 
+	let pending_create_inherent_data_providers = move |_, _| async move {
+		let timestamp = sp_timestamp::InherentDataProvider::from_system_time();
+		// Create a dummy parachain inherent data provider which is required to pass
+		// the checks by the para chain system. We use dummy values because in the 'pending context'
+		// neither do we have access to the real values nor do we need them.
+		let (relay_parent_storage_root, relay_chain_state) =
+			RelayStateSproofBuilder::default().into_state_root_and_proof();
+		let vfp = PersistedValidationData {
+			// This is a hack to make `cumulus_pallet_parachain_system::RelayNumberStrictlyIncreases`
+			// happy. Relay parent number can't be bigger than u32::MAX.
+			relay_parent_number: u32::MAX,
+			relay_parent_storage_root,
+			..Default::default()
+		};
+		let parachain_inherent_data = ParachainInherentData {
+			validation_data: vfp,
+			relay_chain_state: relay_chain_state,
+			downward_messages: Default::default(),
+			horizontal_messages: Default::default(),
+		};
+		Ok((timestamp, parachain_inherent_data))
+	};
+
 	io.merge(
-		Eth::new(
+		Eth::<_, _, _, _, _, _, _, MoonbeamEthConfig<_, _>>::new(
 			Arc::clone(&client),
 			Arc::clone(&pool),
 			graph.clone(),
@@ -258,6 +285,8 @@ where
 			fee_history_limit,
 			10,
 			forced_parent_hashes,
+			pending_create_inherent_data_providers,
+			Some(pending_consenus_data_provider),
 		)
 		.replace_config::<MoonbeamEthConfig<C, BE>>()
 		.into_rpc(),
@@ -268,10 +297,11 @@ where
 			EthFilter::new(
 				client.clone(),
 				frontier_backend.clone(),
+				graph.clone(),
 				filter_pool,
 				500_usize, // max stored filters
 				max_past_logs,
-				block_data_cache.clone(),
+				block_data_cache,
 			)
 			.into_rpc(),
 		)?;
@@ -347,7 +377,7 @@ pub struct SpawnTasksParams<'a, B: BlockT, C, BE> {
 	pub task_manager: &'a TaskManager,
 	pub client: Arc<C>,
 	pub substrate_backend: Arc<BE>,
-	pub frontier_backend: Arc<fc_db::Backend<B>>,
+	pub frontier_backend: fc_db::Backend<B>,
 	pub filter_pool: Option<FilterPool>,
 	pub overrides: Arc<OverrideHandle<B>>,
 	pub fee_history_limit: u64,
@@ -377,24 +407,47 @@ pub fn spawn_essential_tasks<B, C, BE>(
 {
 	// Frontier offchain DB task. Essential.
 	// Maps emulated ethereum data to substrate native data.
-	params.task_manager.spawn_essential_handle().spawn(
-		"frontier-mapping-sync-worker",
-		Some("frontier"),
-		MappingSyncWorker::new(
-			params.client.import_notification_stream(),
-			Duration::new(6, 0),
-			params.client.clone(),
-			params.substrate_backend.clone(),
-			params.overrides.clone(),
-			params.frontier_backend.clone(),
-			3,
-			0,
-			SyncStrategy::Parachain,
-			sync,
-			pubsub_notification_sinks,
-		)
-		.for_each(|()| futures::future::ready(())),
-	);
+	match params.frontier_backend {
+		fc_db::Backend::KeyValue(b) => {
+			params.task_manager.spawn_essential_handle().spawn(
+				"frontier-mapping-sync-worker",
+				Some("frontier"),
+				MappingSyncWorker::new(
+					params.client.import_notification_stream(),
+					Duration::new(6, 0),
+					params.client.clone(),
+					params.substrate_backend.clone(),
+					params.overrides.clone(),
+					Arc::new(b),
+					3,
+					0,
+					SyncStrategy::Parachain,
+					sync.clone(),
+					pubsub_notification_sinks.clone(),
+				)
+				.for_each(|()| futures::future::ready(())),
+			);
+		}
+		fc_db::Backend::Sql(b) => {
+			params.task_manager.spawn_essential_handle().spawn_blocking(
+				"frontier-mapping-sync-worker",
+				Some("frontier"),
+				fc_mapping_sync::sql::SyncWorker::run(
+					params.client.clone(),
+					params.substrate_backend.clone(),
+					Arc::new(b),
+					params.client.import_notification_stream(),
+					fc_mapping_sync::sql::SyncWorkerConfig {
+						read_notification_timeout: Duration::from_secs(10),
+						check_indexed_blocks_interval: Duration::from_secs(60),
+					},
+					fc_mapping_sync::SyncStrategy::Parachain,
+					sync.clone(),
+					pubsub_notification_sinks.clone(),
+				),
+			);
+		}
+	}
 
 	// Frontier `EthFilterApi` maintenance.
 	// Manages the pool of user-created Filters.

@@ -20,8 +20,8 @@
 
 use fp_evm::PrecompileHandle;
 use frame_support::{
-	dispatch::{Dispatchable, GetDispatchInfo, PostDispatchInfo},
-	sp_runtime::traits::{Bounded, CheckedSub, StaticLookup},
+	dispatch::{GetDispatchInfo, PostDispatchInfo},
+	sp_runtime::traits::{Bounded, CheckedSub, Dispatchable, StaticLookup},
 	storage::types::{StorageDoubleMap, StorageMap, ValueQuery},
 	traits::StorageInstance,
 	Blake2_128Concat,
@@ -180,14 +180,13 @@ pub struct Erc20BalancesPrecompile<Runtime, Metadata: Erc20Metadata, Instance: '
 #[precompile_utils::precompile]
 impl<Runtime, Metadata, Instance> Erc20BalancesPrecompile<Runtime, Metadata, Instance>
 where
-	Metadata: Erc20Metadata,
-	Instance: InstanceToPrefix + 'static,
-	Runtime: pallet_balances::Config<Instance> + pallet_evm::Config + pallet_timestamp::Config,
+	Runtime: pallet_balances::Config<Instance> + pallet_evm::Config,
 	Runtime::RuntimeCall: Dispatchable<PostInfo = PostDispatchInfo> + GetDispatchInfo,
 	Runtime::RuntimeCall: From<pallet_balances::Call<Runtime, Instance>>,
 	<Runtime::RuntimeCall as Dispatchable>::RuntimeOrigin: From<Option<Runtime::AccountId>>,
 	BalanceOf<Runtime, Instance>: TryFrom<U256> + Into<U256>,
-	<Runtime as pallet_timestamp::Config>::Moment: Into<U256>,
+	Metadata: Erc20Metadata,
+	Instance: InstanceToPrefix + 'static,
 {
 	#[precompile::public("totalSupply()")]
 	#[precompile::view]
@@ -284,10 +283,11 @@ where
 			RuntimeHelper::<Runtime>::try_dispatch(
 				handle,
 				Some(origin).into(),
-				pallet_balances::Call::<Runtime, Instance>::transfer {
+				pallet_balances::Call::<Runtime, Instance>::transfer_allow_death {
 					dest: Runtime::Lookup::unlookup(to),
 					value: value,
 				},
+				SYSTEM_ACCOUNT_SIZE,
 			)?;
 		}
 
@@ -349,10 +349,11 @@ where
 			RuntimeHelper::<Runtime>::try_dispatch(
 				handle,
 				Some(from).into(),
-				pallet_balances::Call::<Runtime, Instance>::transfer {
+				pallet_balances::Call::<Runtime, Instance>::transfer_allow_death {
 					dest: Runtime::Lookup::unlookup(to),
 					value: value,
 				},
+				SYSTEM_ACCOUNT_SIZE,
 			)?;
 		}
 
@@ -410,10 +411,11 @@ where
 		RuntimeHelper::<Runtime>::try_dispatch(
 			handle,
 			Some(precompile).into(),
-			pallet_balances::Call::<Runtime, Instance>::transfer {
+			pallet_balances::Call::<Runtime, Instance>::transfer_allow_death {
 				dest: Runtime::Lookup::unlookup(caller),
 				value: amount,
 			},
+			SYSTEM_ACCOUNT_SIZE,
 		)?;
 
 		log2(

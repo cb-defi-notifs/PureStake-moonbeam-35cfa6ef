@@ -1,23 +1,24 @@
 import { ApiDecoration } from "@polkadot/api/types";
 import chalk from "chalk";
-import { describeSuite, expect, beforeAll } from "@moonwall/cli";
+import { describeSuite, beforeAll } from "@moonwall/cli";
 import { ONE_HOURS } from "@moonwall/util";
 import { ApiPromise } from "@polkadot/api";
+
 const pageSize = (process.env.PAGE_SIZE && parseInt(process.env.PAGE_SIZE)) || 500;
 
 // TODO: This test case really spams the logs, we should find a way to make it less verbose
 describeSuite({
-  id: "S1500",
+  id: "S16",
   title: "Polkadot API - Storage items",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let atBlockNumber: number = 0;
-    let apiAt: ApiDecoration<"promise"> = null;
+    let apiAt: ApiDecoration<"promise">;
     let specVersion: number = 0;
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       atBlockNumber = (await paraApi.rpc.chain.getHeader()).number.toNumber();
       apiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
       specVersion = apiAt.consts.system.version.specVersion.toNumber();
@@ -41,10 +42,15 @@ describeSuite({
             continue;
           }
           for (const fn of fns) {
-            if (moduleName == "evm" && ["accountStorages", "accountCodes"].includes(fn)) {
+            log(`🔎 checking ${moduleName}::${fn}`);
+            if (
+              moduleName == "evm" &&
+              ["accountStorages", "accountCodes", "accountCodesMetadata"].includes(fn)
+            ) {
               // This is just H256 entries and quite big
               continue;
             }
+
             if (
               moduleName == "parachainStaking" &&
               ["atStake"].includes(fn) &&
@@ -59,8 +65,8 @@ describeSuite({
               // Map item
               let startKey = "";
               let count = 0;
-              while (true) {
-                let query = await module[fn].entriesPaged({
+              for (;;) {
+                const query = await module[fn].entriesPaged({
                   args: [],
                   pageSize,
                   startKey,

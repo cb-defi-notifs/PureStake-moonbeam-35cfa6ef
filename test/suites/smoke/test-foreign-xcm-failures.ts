@@ -7,7 +7,6 @@ import { rateLimiter, checkTimeSliceForUpgrades } from "../../helpers/common.js"
 import { ForeignChainsEndpoints, getEndpoints } from "../../helpers/foreign-chains.js";
 
 const timePeriod = process.env.TIME_PERIOD ? Number(process.env.TIME_PERIOD) : TEN_MINS;
-const timeout = Math.max(Math.floor(timePeriod / 12), 60000);
 const limiter = rateLimiter();
 
 type BlockEventsRecord = {
@@ -23,7 +22,7 @@ type NetworkBlockEvents = {
 let skip = false;
 
 describeSuite({
-  id: "S1100",
+  id: "S13",
   title:
     `Foreign XCM Failures in past ${(timePeriod / (1000 * 60 * 60)).toFixed(2)} hours` +
     ` should not be serious`,
@@ -34,7 +33,7 @@ describeSuite({
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       const networkName = paraApi.runtimeChain.toString();
       const foreignChainInfos = ForeignChainsEndpoints.find(
         (a) => a.moonbeamNetworkName === networkName
@@ -57,14 +56,14 @@ describeSuite({
         return { ...chain, endpoints };
       });
 
-      const promises = chainsWithRpcs.map(async ({ name, endpoints, mutedUntil }) => {
-        let blockEvents: BlockEventsRecord[];
+      const promises = chainsWithRpcs.map(async ({ name, endpoints, mutedUntil = 0 }) => {
+        let blockEvents: BlockEventsRecord[] = [];
 
-        if (mutedUntil >= new Date().getTime()) {
+        if (mutedUntil && mutedUntil >= new Date().getTime()) {
           log(`Network tests for ${name} has been muted, skipping.`);
           return { networkName: name, blockEvents: [] };
         }
-
+        let result;
         try {
           const api: ApiPromise = await new Promise((resolve, reject) => {
             const provider = new WsProvider(endpoints);
@@ -117,8 +116,9 @@ describeSuite({
         } catch (e) {
           blockEvents = [];
         } finally {
-          return { networkName: name, blockEvents };
+          result = { networkName: name, blockEvents };
         }
+        return result;
       });
       networkBlockEvents = await Promise.all(promises);
     }, TEN_MINS);

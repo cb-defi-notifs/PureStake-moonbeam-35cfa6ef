@@ -6,44 +6,47 @@ import {
 } from "@polkadot/apps-config/endpoints";
 
 export interface ForeignChainsInfo {
-  moonbeamNetworkName: string;
-  moonbeamParaId: number;
-  foreignChains: ForeignChainInfo[];
+  readonly moonbeamNetworkName: string;
+  readonly moonbeamParaId: number;
+  readonly foreignChains: ReadonlyArray<ForeignChainInfo>;
 }
 
 export interface ForeignChainInfo {
-  name: string;
-  paraId: number;
-  mutedUntil?: number;
-  endpoints?: string[];
+  readonly name: string;
+  readonly paraId: number;
+  readonly mutedUntil?: number | false;
+  readonly endpoints?: readonly string[];
 }
 
 export const getEndpoints = (relay: "Polkadot" | "Kusama" | "Unsupported", paraId: number) => {
   switch (relay) {
-    case "Polkadot":
+    case "Polkadot": {
       if (paraId < 2000) {
         const commonGoodPolka = prodParasPolkadotCommon.find((a) => a.paraId === paraId);
-        return Object.values(commonGoodPolka.providers);
+        return Object.values(commonGoodPolka!.providers);
       }
       const polkaPara = prodParasPolkadot.find((a) => a.paraId === paraId);
-      return Object.values(polkaPara.providers);
-    case "Kusama":
+      return Object.values(polkaPara!.providers);
+    }
+    case "Kusama": {
       if (paraId < 2000) {
         const commonGoodKusama = prodParasKusamaCommon.find((a) => a.paraId === paraId);
-        return Object.values(commonGoodKusama.providers);
+        return Object.values(commonGoodKusama!.providers);
       }
       const kusamaPara = prodParasKusama.find((a) => a.paraId === paraId);
-      return Object.values(kusamaPara.providers);
+      return Object.values(kusamaPara!.providers);
+    }
     case "Unsupported":
       throw new Error("Unsupported chain.");
   }
 };
 
-export const isMuted = (moonbeamNetworkName: string, paraId: number) => {
+export const isMuted = (moonbeamNetworkName: MoonbeamNetworkName, paraId: ParaId) => {
   const info = ForeignChainsEndpoints.find((a) => a.moonbeamNetworkName === moonbeamNetworkName);
 
   if (info) {
-    const match = info.foreignChains.find((a) => a.paraId === paraId);
+    const chains = info.foreignChains as ReadonlyArray<ForeignChainInfo>;
+    const match = chains.find((chain) => chain.paraId === paraId);
 
     if (!match) {
       console.error(`⚠️  No static data for ParaId ${paraId}, please add to foreign-chains.ts`);
@@ -55,7 +58,7 @@ export const isMuted = (moonbeamNetworkName: string, paraId: number) => {
   } else return false;
 };
 
-export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
+export const ForeignChainsEndpoints = [
   {
     moonbeamNetworkName: "Moonriver",
     moonbeamParaId: 2023,
@@ -63,6 +66,7 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
       {
         name: "Statemine",
         paraId: 1000,
+        mutedUntil: false,
       },
       {
         name: "Karura",
@@ -101,6 +105,10 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
         paraId: 2085,
       },
       {
+        name: "Picasso",
+        paraId: 2087,
+      },
+      {
         name: "Kintsugi",
         paraId: 2092,
       },
@@ -112,6 +120,18 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
         name: "Litmus",
         paraId: 2106,
       },
+      {
+        name: "Mangata",
+        paraId: 2110,
+      },
+      {
+        name: "Turing",
+        paraId: 2114,
+      },
+      {
+        name: "InvArch",
+        paraId: 2125,
+      },
     ],
   },
   {
@@ -121,6 +141,7 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
       {
         name: "Statemint",
         paraId: 1000,
+        mutedUntil: false,
       },
       {
         name: "Acala",
@@ -131,8 +152,21 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
         paraId: 2006,
       },
       {
+        name: "Equilibrium",
+        paraId: 2011,
+        mutedUntil: new Date("2024-06-01").getTime(),
+      },
+      {
         name: "Parallel",
         paraId: 2012,
+      },
+      {
+        name: "Composable",
+        paraId: 2019,
+      },
+      {
+        name: "Nodle",
+        paraId: 2026,
       },
       {
         name: "Bifrost",
@@ -147,17 +181,56 @@ export const ForeignChainsEndpoints: ForeignChainsInfo[] = [
         paraId: 2032,
       },
       {
+        name: "HydraDX",
+        paraId: 2034,
+      },
+      {
         name: "Phala",
         paraId: 2035,
+      },
+      {
+        name: "Unique",
+        paraId: 2037,
+      },
+      {
+        name: "Polkadex",
+        paraId: 2040,
+      },
+      {
+        name: "OriginTrail",
+        paraId: 2043,
       },
       {
         name: "Darwinia",
         paraId: 2046,
       },
       {
-        name: "Equilibrium",
-        paraId: 2011,
+        name: "Zeitgeist",
+        paraId: 2092,
+      },
+      {
+        name: "Pendulum",
+        paraId: 2094,
+      },
+      {
+        name: "Subsocial",
+        paraId: 2101,
+      },
+      {
+        name: "Manta",
+        paraId: 2104,
+      },
+      {
+        name: "peaq",
+        paraId: 3338,
       },
     ],
   },
-];
+] satisfies ReadonlyArray<ForeignChainsInfo>;
+
+type ValueOf<T> = T extends readonly (infer U)[] ? U : never;
+export type MoonbeamNetworkName = ValueOf<typeof ForeignChainsEndpoints>["moonbeamNetworkName"];
+
+type ElementOf<T> = T extends readonly (infer U)[] ? U : never;
+type ForeignChainInfoType = ElementOf<typeof ForeignChainsEndpoints>["foreignChains"][number];
+export type ParaId = ForeignChainInfoType["paraId"];

@@ -21,6 +21,7 @@ frame-system = { workspace = true }
 sp-core = { workspace = true }
 sp-runtime = { workspace = true }
 sp-std = { workspace = true }
+sp-weights = { workspace = true }
 
 # Frontier
 evm = { workspace = true, features = [ "with-codec" ] }
@@ -39,11 +40,11 @@ serde = { workspace = true }
 sha3 = { workspace = true }
 
 # Moonbeam
-precompile-utils = { workspace = true, features = [ "testing" ] }
+precompile-utils = { workspace = true, features = [ "testing", "codec-xcm" ] }
 xcm-primitives = { workspace = true }
 
 # Substrate
-pallet-balances = { workspace = true, features = [ "std" ] }
+pallet-balances = { workspace = true, features = [ "std", "insecure_zero_ed" ] }
 pallet-timestamp = { workspace = true }
 parity-scale-codec = { workspace = true, features = [ "max-encoded-len" ] }
 scale-info = { workspace = true, features = [ "derive" ] }
@@ -69,4 +70,9 @@ std = [
 	"sp-core/std",
 	"sp-std/std",
 	"xcm-primitives/std",
+]
+runtime-benchmarks = [
+	"frame-support/runtime-benchmarks",
+	"frame-system/runtime-benchmarks",
+	"xcm-builder/runtime-benchmarks",
 ]

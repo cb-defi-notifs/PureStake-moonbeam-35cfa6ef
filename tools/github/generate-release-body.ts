@@ -3,7 +3,7 @@ import yargs from "yargs";
 import { getCommitAndLabels, getCompareLink } from "./github-utils";
 
 const BINARY_CHANGES_LABEL = "B5-clientnoteworthy";
-const BREAKING_CHANGES_LABEL = "D2-breaksapi";
+const BREAKING_CHANGES_LABEL = "breaking";
 
 function capitalize(s) {
   return s[0].toUpperCase() + s.slice(1);
@@ -44,8 +44,7 @@ async function main() {
 
   const previousTag = argv.from;
   const newTag = argv.to;
-
-  const moduleLinks = ["substrate", "polkadot", "cumulus", "frontier"].map((repoName) => ({
+  const moduleLinks = ["polkadot-sdk", "frontier", "moonkit"].map((repoName) => ({
     name: repoName,
     link: getCompareLink(repoName, previousTag, newTag),
   }));

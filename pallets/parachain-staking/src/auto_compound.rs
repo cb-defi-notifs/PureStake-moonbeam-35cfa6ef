@@ -21,14 +21,13 @@ use crate::pallet::{
 	CandidateInfo, Config, DelegatorState, Error, Event, Pallet, Total,
 };
 use crate::types::{Bond, BondAdjust, Delegator};
+use frame_support::dispatch::DispatchResultWithPostInfo;
 use frame_support::ensure;
 use frame_support::traits::Get;
-use frame_support::{dispatch::DispatchResultWithPostInfo, RuntimeDebug};
 use parity_scale_codec::{Decode, Encode};
 use scale_info::TypeInfo;
 use sp_runtime::traits::Saturating;
-use sp_runtime::BoundedVec;
-use sp_runtime::Percent;
+use sp_runtime::{BoundedVec, Percent, RuntimeDebug};
 use sp_std::prelude::*;
 
 /// Represents the auto-compounding amount for a delegation.
@@ -61,6 +60,10 @@ where
 		>,
 	) -> Self {
 		Self(sorted_delegations)
+	}
+
+	pub fn get_auto_compounding_delegation_count(candidate: &T::AccountId) -> usize {
+		<AutoCompoundingDelegationsStorage<T>>::decode_len(candidate).unwrap_or_default()
 	}
 
 	/// Retrieves an instance of [AutoCompoundingDelegations] storage as [AutoCompoundDelegations].
@@ -165,13 +168,13 @@ where
 			<Pallet<T>>::get_delegator_stakable_free_balance(&delegator) >= amount,
 			Error::<T>::InsufficientBalance
 		);
+		ensure!(
+			amount >= T::MinDelegation::get(),
+			Error::<T>::DelegationBelowMin
+		);
 
 		let mut delegator_state = if let Some(mut state) = <DelegatorState<T>>::get(&delegator) {
 			// delegation after first
-			ensure!(
-				amount >= T::MinDelegation::get(),
-				Error::<T>::DelegationBelowMin
-			);
 			ensure!(
 				delegation_count_hint >= state.delegations.0.len() as u32,
 				Error::<T>::TooLowDelegationCountToDelegate
@@ -191,10 +194,6 @@ where
 		} else {
 			// first delegation
 			ensure!(
-				amount >= T::MinDelegatorStk::get(),
-				Error::<T>::DelegatorBondBelowMin
-			);
-			ensure!(
 				!<Pallet<T>>::is_candidate(&delegator),
 				Error::<T>::CandidateExists
 			);
@@ -209,7 +208,7 @@ where
 
 		if !auto_compound.is_zero() {
 			ensure!(
-				Self::get_storage(&candidate).len()
+				Self::get_auto_compounding_delegation_count(&candidate) as u32
 					<= candidate_auto_compounding_delegation_count_hint,
 				<Error<T>>::TooLowCandidateAutoCompoundingDelegationCountToDelegate,
 			);

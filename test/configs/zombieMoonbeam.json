@@ -11,6 +11,21 @@
       "-lparachain=debug",
       "--database=paritydb"
     ],
+    "genesis": {
+      "runtimeGenesis": {
+        "patch": {
+          "configuration": {
+            "config": {
+              "scheduling_lookahead": 2,
+              "async_backing_params": {
+                "max_candidate_depth": 3,
+                "allowed_ancestry_len": 2
+              }
+            }
+          }
+        }
+      }
+    },
     "nodes": [
       {
         "name": "alice",
@@ -26,7 +41,7 @@
     {
       "id": 1000,
       "chain": "moonbeam-local",
-      "chain_spec_path": "tmp/moonbeam-raw-spec.json",
+      "chain_spec_path": "tmp/moonbeam-modified-raw-spec.json",
       "collator": {
         "name": "alith",
         "command": "../target/release/moonbeam",

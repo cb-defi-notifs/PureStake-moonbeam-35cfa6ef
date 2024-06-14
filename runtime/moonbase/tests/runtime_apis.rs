@@ -26,6 +26,8 @@ use pallet_evm::{Account as EVMAccount, AddressMapping, FeeCalculator};
 use sp_core::{ByteArray, H160, H256, U256};
 
 use fp_rpc::runtime_decl_for_ethereum_runtime_rpc_api::EthereumRuntimeRPCApi;
+use moonbase_runtime::{Executive, TransactionPaymentAsGasPrice};
+use moonbeam_core_primitives::Header;
 use moonbeam_rpc_primitives_txpool::runtime_decl_for_tx_pool_runtime_api::TxPoolRuntimeApi;
 use nimbus_primitives::runtime_decl_for_nimbus_api::NimbusApi;
 use std::{collections::BTreeMap, str::FromStr};
@@ -40,7 +42,10 @@ fn ethereum_runtime_rpc_api_chain_id() {
 #[test]
 fn ethereum_runtime_rpc_api_account_basic() {
 	ExtBuilder::default()
-		.with_balances(vec![(AccountId::from(ALICE), 2_000 * UNIT)])
+		.with_balances(vec![(
+			AccountId::from(ALICE),
+			2_000 * UNIT + existential_deposit(),
+		)])
 		.build()
 		.execute_with(|| {
 			assert_eq!(
@@ -106,7 +111,6 @@ fn ethereum_runtime_rpc_api_author() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
 			run_to_block(2, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
 			assert_eq!(Runtime::author(), H160::from(ALICE));
 		});
@@ -212,7 +216,6 @@ fn ethereum_runtime_rpc_api_current_transaction_statuses() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
 			let _result = Executive::apply_extrinsic(unchecked_eth_tx(VALID_ETH_TX));
 			rpc_run_to_block(2);
 			let statuses =
@@ -240,7 +243,6 @@ fn ethereum_runtime_rpc_api_current_block() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
 			rpc_run_to_block(2);
 			let block = Runtime::current_block().expect("Block result.");
 			assert_eq!(block.header.number, U256::from(1u8));
@@ -271,7 +273,6 @@ fn ethereum_runtime_rpc_api_current_receipts() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
 			let _result = Executive::apply_extrinsic(unchecked_eth_tx(VALID_ETH_TX));
 			rpc_run_to_block(2);
 			let receipts = Runtime::current_receipts().expect("Receipts result.");
@@ -283,7 +284,7 @@ fn ethereum_runtime_rpc_api_current_receipts() {
 fn txpool_runtime_api_extrinsic_filter() {
 	ExtBuilder::default().build().execute_with(|| {
 		let non_eth_uxt = UncheckedExtrinsic::new_unsigned(
-			pallet_balances::Call::<Runtime>::transfer {
+			pallet_balances::Call::<Runtime>::transfer_allow_death {
 				dest: AccountId::from(BOB),
 				value: 1 * UNIT,
 			}
@@ -314,7 +315,6 @@ fn can_author_when_selected_is_empty() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
 			run_to_block(2, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
 
 			assert_eq!(ParachainStaking::candidate_pool().0.len(), 1);

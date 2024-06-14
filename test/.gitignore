@@ -1,12 +1,15 @@
 tmp/*
 *.sqlite
 *.wasm
+*.zip
 
 moonbeam
+!suites/dev/moonbeam
 polkadot
 
 *spec.json
-html
+html/
 
 contracts/cache
 contracts/out
+wasm/precompiled*

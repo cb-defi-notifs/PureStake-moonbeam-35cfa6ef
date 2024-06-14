@@ -170,7 +170,7 @@ impl<A, B: Default> Default for CollatorSnapshot<A, B> {
 	}
 }
 
-#[derive(Default, Encode, Decode, RuntimeDebug, TypeInfo)]
+#[derive(Clone, Default, Encode, Decode, RuntimeDebug, TypeInfo)]
 /// Info needed to make delayed payments to stakers after round end
 pub struct DelayedPayout<Balance> {
 	/// Total round reward (result of compute_issuance() at round end)
@@ -458,6 +458,37 @@ impl<
 		});
 		Ok(())
 	}
+
+	pub fn bond_less<T: Config>(&mut self, who: T::AccountId, amount: Balance)
+	where
+		BalanceOf<T>: From<Balance>,
+	{
+		let new_total_staked = <Total<T>>::get().saturating_sub(amount.into());
+		<Total<T>>::put(new_total_staked);
+		self.bond = self.bond.saturating_sub(amount);
+		if self.bond.is_zero() {
+			T::Currency::remove_lock(COLLATOR_LOCK_ID, &who);
+		} else {
+			T::Currency::set_lock(
+				COLLATOR_LOCK_ID,
+				&who,
+				self.bond.into(),
+				WithdrawReasons::all(),
+			);
+		}
+		self.total_counted = self.total_counted.saturating_sub(amount);
+		let event = Event::CandidateBondedLess {
+			candidate: who.clone(),
+			amount: amount.into(),
+			new_bond: self.bond.into(),
+		};
+		// update candidate pool value because it must change if self bond changes
+		if self.is_active() {
+			Pallet::<T>::update_active(who, self.total_counted.into());
+		}
+		Pallet::<T>::deposit_event(event);
+	}
+
 	/// Schedule executable decrease of collator candidate self bond
 	/// Returns the round at which the collator can execute the pending request
 	pub fn schedule_bond_less<T: Config>(
@@ -498,32 +529,12 @@ impl<
 			request.when_executable <= <Round<T>>::get().current,
 			Error::<T>::PendingCandidateRequestNotDueYet
 		);
-		let new_total_staked = <Total<T>>::get().saturating_sub(request.amount.into());
-		<Total<T>>::put(new_total_staked);
-		// Arithmetic assumptions are self.bond > less && self.bond - less > CollatorMinBond
-		// (assumptions enforced by `schedule_bond_less`; if storage corrupts, must re-verify)
-		self.bond = self.bond.saturating_sub(request.amount);
-		T::Currency::set_lock(
-			COLLATOR_LOCK_ID,
-			&who.clone(),
-			self.bond.into(),
-			WithdrawReasons::all(),
-		);
-		self.total_counted = self.total_counted.saturating_sub(request.amount);
-		let event = Event::CandidateBondedLess {
-			candidate: who.clone().into(),
-			amount: request.amount.into(),
-			new_bond: self.bond.into(),
-		};
+		self.bond_less::<T>(who.clone(), request.amount);
 		// reset s.t. no pending request
 		self.request = None;
-		// update candidate pool value because it must change if self bond changes
-		if self.is_active() {
-			Pallet::<T>::update_active(who.into(), self.total_counted.into());
-		}
-		Pallet::<T>::deposit_event(event);
 		Ok(())
 	}
+
 	/// Cancel candidate bond less request
 	pub fn cancel_bond_less<T: Config>(&mut self, who: T::AccountId) -> DispatchResult
 	where
@@ -1390,7 +1401,7 @@ impl<
 			false
 		}
 	}
-	// Return Some(remaining balance), must be more than MinDelegatorStk
+	// Return Some(remaining balance), must be more than MinDelegation
 	// Return None if delegation not found
 	pub fn rm_delegation<T: Config>(&mut self, collator: &AccountId) -> Option<Balance>
 	where
@@ -1702,16 +1713,19 @@ pub struct RoundInfo<BlockNumber> {
 	pub first: BlockNumber,
 	/// The length of the current round in number of blocks
 	pub length: u32,
+	/// The first slot of the current round
+	pub first_slot: u64,
 }
 impl<
 		B: Copy + sp_std::ops::Add<Output = B> + sp_std::ops::Sub<Output = B> + From<u32> + PartialOrd,
 	> RoundInfo<B>
 {
-	pub fn new(current: RoundIndex, first: B, length: u32) -> RoundInfo<B> {
+	pub fn new(current: RoundIndex, first: B, length: u32, first_slot: u64) -> RoundInfo<B> {
 		RoundInfo {
 			current,
 			first,
 			length,
+			first_slot,
 		}
 	}
 	/// Check if the round should be updated
@@ -1719,9 +1733,10 @@ impl<
 		now - self.first >= self.length.into()
 	}
 	/// New round
-	pub fn update(&mut self, now: B) {
+	pub fn update(&mut self, now: B, now_slot: u64) {
 		self.current = self.current.saturating_add(1u32);
 		self.first = now;
+		self.first_slot = now_slot;
 	}
 }
 impl<
@@ -1729,7 +1744,7 @@ impl<
 	> Default for RoundInfo<B>
 {
 	fn default() -> RoundInfo<B> {
-		RoundInfo::new(1u32, 1u32.into(), 20u32)
+		RoundInfo::new(1u32, 1u32.into(), 20u32, 0)
 	}
 }
 

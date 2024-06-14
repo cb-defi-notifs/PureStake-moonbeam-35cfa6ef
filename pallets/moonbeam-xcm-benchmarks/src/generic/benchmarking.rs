@@ -16,7 +16,7 @@
 
 use super::*;
 use frame_benchmarking::{benchmarks, BenchmarkError, BenchmarkResult};
-use frame_support::dispatch::Weight;
+use frame_support::{traits::TrackedStorageKey, weights::Weight};
 use pallet_xcm_benchmarks::{new_executor, XcmCallOf};
 use sp_std::vec;
 use sp_std::vec::Vec;
@@ -30,7 +30,7 @@ benchmarks! {
 		let mut executor = new_executor::<T>(Default::default());
 		executor.set_holding(holding);
 
-		let fee_asset = Concrete(MultiLocation::parent());
+		let fee_asset = AssetId(Location::parent());
 
 		let instruction = Instruction::<XcmCallOf<T>>::BuyExecution {
 			fees: (fee_asset, 100_000_000u128).into(), // should be something inside of holding
@@ -98,7 +98,7 @@ impl<T: Config> frame_benchmarking::Benchmarking for XcmGenericBenchmarks<T> {
 	fn run_benchmark(
 		extrinsic: &[u8],
 		c: &[(frame_benchmarking::BenchmarkParameter, u32)],
-		whitelist: &[frame_benchmarking::TrackedStorageKey],
+		whitelist: &[TrackedStorageKey],
 		verify: bool,
 		internal_repeats: u32,
 	) -> Result<Vec<frame_benchmarking::BenchmarkResult>, frame_benchmarking::BenchmarkError> {

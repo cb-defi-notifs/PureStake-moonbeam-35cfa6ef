@@ -3,15 +3,19 @@ import { ApiDecoration } from "@polkadot/api/types";
 import { BN, hexToBigInt } from "@polkadot/util";
 import { describeSuite, expect, beforeAll } from "@moonwall/cli";
 import { ApiPromise } from "@polkadot/api";
+import randomLib from "randomness";
+import { Bit } from "randomness/lib/types";
+import chalk from "chalk";
+
 const RANDOMNESS_ACCOUNT_ID = "0x6d6f646c6d6f6f6e72616e640000000000000000";
 
 describeSuite({
-  id: "S1700",
+  id: "S18",
   title: "Verify randomness consistency",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let atBlockNumber: number = 0;
-    let apiAt: ApiDecoration<"promise"> = null;
+    let apiAt: ApiDecoration<"promise">;
     const requestStates: { id: number; state: any }[] = [];
     let numRequests: number = 0; // our own count
     let requestCount: number = 0; // from pallet storage
@@ -19,7 +23,7 @@ describeSuite({
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       const runtimeVersion = paraApi.runtimeVersion.specVersion.toNumber();
       const runtimeName = paraApi.runtimeVersion.specName.toString();
       isRandomnessAvailable =
@@ -39,8 +43,8 @@ describeSuite({
         : (await paraApi.rpc.chain.getHeader()).number.toNumber();
       apiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
 
-      while (true) {
-        let query = await apiAt.query.randomness.requests.entriesPaged({
+      for (;;) {
+        const query = await apiAt.query.randomness.requests.entriesPaged({
           args: [],
           pageSize: limit,
           startKey: last_key,
@@ -63,9 +67,9 @@ describeSuite({
           last_key = key;
         }
 
-        if (true || count % (10 * limit) == 0) {
+        if (count % (10 * limit) == 0) {
           log(`Retrieved ${count} requests`);
-          log(`Requests: ${requestStates}`);
+          log(`Requests: ${requestStates.map((r) => r.id).join(",")}`);
         }
       }
 
@@ -110,8 +114,8 @@ describeSuite({
           return;
         }
 
-        let query = await apiAt.query.randomness.randomnessResults.entries();
-        await query.forEach(([key, results]) => {
+        const query = await apiAt.query.randomness.randomnessResults.entries();
+        query.forEach(([key, results]) => {
           // offset is:
           // * 2 for "0x"
           // * 32 for module
@@ -133,8 +137,8 @@ describeSuite({
           );
 
           if ((requestType as any).isBabeEpoch) {
-            let epoch = (requestType as any).asBabeEpoch;
-            let found = requestStates.find((request) => {
+            const epoch = (requestType as any).asBabeEpoch;
+            const found = requestStates.find((request) => {
               // TODO: can we traverse this hierarchy of types without creating each?
               const requestState = paraApi.registry.createType(
                 "PalletRandomnessRequestState",
@@ -158,8 +162,8 @@ describeSuite({
             expect(found).is.not.undefined;
           } else {
             // look for any requests which depend on the "local" block
-            let block = (requestType as any).asLocal;
-            let found = requestStates.find((request) => {
+            const block = (requestType as any).asLocal;
+            const found = requestStates.find((request) => {
               // TODO: can we traverse this hierarchy of types without creating each?
               const requestState = paraApi.registry.createType(
                 "PalletRandomnessRequestState",
@@ -196,7 +200,7 @@ describeSuite({
         }
 
         // Local count for request types
-        const requestCounts = {};
+        const requestCounts: any = {};
         requestStates.forEach((request) => {
           const requestState = paraApi.registry.createType(
             "PalletRandomnessRequestState",
@@ -218,8 +222,8 @@ describeSuite({
             requestCounts[local[0]] = (requestCounts[local[0]] || new BN(0)).add(new BN(1));
           }
         });
-        let query = await apiAt.query.randomness.randomnessResults.entries();
-        await query.forEach(([key, results]) => {
+        const query = await apiAt.query.randomness.randomnessResults.entries();
+        query.forEach(([key, results]) => {
           // offset is:
           // * 2 for "0x"
           // * 32 for module
@@ -239,7 +243,7 @@ describeSuite({
           );
           const resultRequestCount = (result as any).requestCount;
           if ((requestType as any).isBabeEpoch) {
-            let epoch = (requestType as any).asBabeEpoch;
+            const epoch = (requestType as any).asBabeEpoch;
             expect(requestCounts[epoch].toString()).to.equal(
               resultRequestCount.toString(),
               "Counted request count" +
@@ -247,7 +251,7 @@ describeSuite({
                 `${result}`
             );
           } else {
-            let local = (requestType as any).asLocal;
+            const local = (requestType as any).asLocal;
             expect(requestCounts[local].toString()).to.equal(
               resultRequestCount.toString(),
               "Counted request count" +
@@ -342,21 +346,46 @@ describeSuite({
       title: "available randomness outputs should be random",
       timeout: 10000,
       test: async function () {
+        // We are using the NIST guideline thresholds, however we are only really concerned if
+        // multiple tests fail given these are all probabilistic tests
+        const maxTestFailures = 4;
+
         if (!isRandomnessAvailable) {
           return;
         }
 
-        let query = await apiAt.query.randomness.randomnessResults.entries();
-        await query.forEach(([key, results]) => {
-          const result = paraApi.registry.createType(
-            "PalletRandomnessRandomnessResult",
-            results.toHex()
-          );
-          const randomnessResult = (result as any).randomness;
-          if (randomnessResult.isSome) {
-            isRandom(randomnessResult.unwrap());
-          }
+        const query = await apiAt.query.randomness.randomnessResults.entries();
+        const randomTestResults = query.map(([key, results]) => {
+          const formattedKey = (key.toHuman() as any)[0];
+          return {
+            request: Object.values(formattedKey)[0],
+            requestType: Object.keys(formattedKey)[0],
+            testResults: results.isSome ? isRandom(results.unwrap().randomness.toU8a()) : true,
+          };
         });
+
+        const failures = randomTestResults
+          .map((item) => {
+            const request = `${item.requestType}: ${(item.request as string).replaceAll(",", "")}`;
+            return {
+              request,
+              failures: Object.entries(item.testResults).reduce((acc, curr) => {
+                if (!curr[1]) {
+                  log(`${chalk.bgBlack.greenBright(curr[0])} failed for request ${request}`);
+                  return acc + 1;
+                }
+                return acc;
+              }, 0),
+            };
+          })
+          .filter((result) => result.failures > maxTestFailures);
+
+        expect(
+          failures.length,
+          `${maxTestFailures}+ randomness checks failed for: ${failures
+            .map((fail) => fail.request)
+            .join(", ")}.`
+        ).to.equal(0);
       },
     });
 
@@ -365,31 +394,53 @@ describeSuite({
       title: "local VRF output should be random",
       timeout: 10000,
       test: async function () {
+        // We are using the NIST guideline thresholds, however we are only really concerned if
+        // multiple tests fail given these are all probabilistic tests
+        const maxTestFailures = 4;
+
         if (!isRandomnessAvailable) {
           return;
         }
 
-        const notFirstBlock = ((await apiAt.query.randomness.notFirstBlock()) as any).isSome;
-        if (notFirstBlock) {
-          const currentOutput = await apiAt.query.randomness.localVrfOutput();
-          const currentRawOutput = paraApi.registry.createType(
-            "H256",
-            (currentOutput as any).toHex()
-          );
-          isRandom(currentRawOutput);
+        if (!(await apiAt.query.randomness.notFirstBlock()).isSome) {
+          log(`This is first block (genesis/runtime upgrade) so skipping test`);
+          return;
         }
+
+        const currentOutput = await apiAt.query.randomness.localVrfOutput();
+        const randomTestResults = isRandom(currentOutput.unwrapOrDefault().toU8a());
+        const failures = Object.entries(randomTestResults).filter(([_, result]) => !result);
+
+        expect(
+          failures.length,
+          `Failed random at #${atBlockNumber} for local VRF: ${failures
+            .map((test) => test[0])
+            .join(", ")}`
+        ).toBeLessThan(maxTestFailures);
       },
     });
 
-    // Tests whether the input bytes appear to be random by measuring the distribution relative to
-    // what would be expected of a uniformly distributed [u8; 32]
+    // The tests here have been taken from recommendations of the NIST whitepaper on
+    // "A Statistical Test Suite for Random and Pseudorandom Number Generators
+    // for Cryptographic Applications" - Lawrence E Bassham III (2010)
+    // https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-22r1a.pdf
     function isRandom(bytes: Uint8Array) {
-      // test whether output bytes are statistically independent
-      chiSquareTest(bytes);
-      // expect average byte of [u8; 32] = ~128 if uniformly distributed ~> expect 81 < X < 175
-      averageByteWithinExpectedRange(bytes, 81, 175);
-      // expect fewer than 4 repeated values in output [u8; 32]
-      outputWithinExpectedRepetition(bytes, 3);
+      const binaryArray = uint8ArrayToBinaryArray(bytes);
+      return {
+        approximateEntropyTest: randomLib.approximateEntropyTest(binaryArray)[0],
+        cumulativeSumsTest: randomLib.cumulativeSumsTest(binaryArray)[0],
+        frequencyWithinBlockTest: randomLib.frequencyWithinBlockTest(binaryArray)[0],
+        longestRunOnesInABlockTest: randomLib.longestRunOnesInABlockTest(binaryArray)[0],
+        monobitTest: randomLib.monobitTest(binaryArray)[0],
+        runsTest: randomLib.runsTest(binaryArray)[0],
+
+        // In-house randomness tests
+        chiSquareTest: chiSquareTest(bytes),
+        // expect average byte of [u8; 32] = ~128 if uniformly distributed ~> expect 81 < X < 175
+        averageByteWithinExpectedRange: averageByteWithinExpectedRange(bytes, 81, 175),
+        // expect fewer than 4 repeated values in output [u8; 32]
+        outputWithinExpectedRepetition: outputWithinExpectedRepetition(bytes, 3),
+      };
     }
 
     // Tests if byte output is independent
@@ -411,37 +462,50 @@ describeSuite({
       });
 
       chiSquared += (numOnes - expectedValue) ** 2.0 / expectedValue;
-      let numZeroes = 256 - numOnes;
+      const numZeroes = 256 - numOnes;
       chiSquared += (numZeroes - expectedValue) ** 2.0 / expectedValue;
 
-      expect(numOnes + numZeroes).to.equal(256, "Data should produce exactly 256 bits");
+      //Data should produce exactly 256 bits
+      const lengthCheck = numOnes + numZeroes === 256;
 
-      expect(chiSquared < pValue).to.equal(
-        true,
-        `Chi square value greater than or equal to expected so bytes in output appear related` +
-          `chiSquared is ${chiSquared} >= ${pValue}`
-      );
+      // Chi square value greater than or equal to expected so bytes in output appear related` +
+      const chiCheck = chiSquared < pValue;
+      return lengthCheck && chiCheck;
     }
 
     // Tests uniform distribution of outputs bytes by checking if average byte is in expected range
     function averageByteWithinExpectedRange(bytes: Uint8Array, min: number, max: number) {
       const average = bytes.reduce((a, b) => a + b) / bytes.length;
-      expect(min <= average && average <= max).to.equal(true, `Average bytes is ${average}`);
+      return min <= average && average <= max;
     }
 
     // Tests uniform distribution of outputs bytes by checking if any repeated bytes
     function outputWithinExpectedRepetition(bytes: Uint8Array, maxRepeats: number) {
-      const counts = {};
-      let fewerThanMaxRepeats = true;
-      bytes.forEach(function (x) {
-        let newCount: number = (counts[x] || 0) + 1;
-        counts[x] = newCount;
-        if (newCount > maxRepeats) {
-          log(`Count of ${x} > ${maxRepeats} maxRepeats\n` + `Bytes: ${bytes}`);
-          fewerThanMaxRepeats = false;
-        }
-      });
-      expect(fewerThanMaxRepeats).to.be.true;
+      const counts = bytes.reduce((acc, byte) => {
+        acc[byte] = (acc[byte] || 0) + 1;
+        return acc;
+      }, {} as { [byte: string]: number });
+
+      const exceededRepeats = Object.values(counts).some((count) => count > maxRepeats);
+
+      if (exceededRepeats) {
+        const problematicByte = Object.keys(counts).find((byte) => counts[byte] > maxRepeats);
+        log(
+          `Count of ${problematicByte}: ${counts[problematicByte!]} > ${maxRepeats} maxRepeats\n` +
+            `Bytes: ${Array.from(bytes).toString()}`
+        );
+      }
+      return !exceededRepeats;
     }
   },
 });
+
+function uint8ArrayToBinaryArray(data: Uint8Array): Bit[] {
+  const result: number[] = [];
+  data.forEach((byte) => {
+    for (let i = 7; i >= 0; i--) {
+      result.push((byte >> i) & 1);
+    }
+  });
+  return result as Bit[];
+}

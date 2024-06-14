@@ -20,25 +20,28 @@ use cumulus_primitives_parachain_inherent::ParachainInherentData;
 use fp_evm::GenesisAccount;
 use frame_support::{
 	assert_ok,
-	dispatch::Dispatchable,
-	traits::{GenesisBuild, OnFinalize, OnInitialize},
+	traits::{OnFinalize, OnInitialize},
 };
 use moonbase_runtime::{asset_config::AssetRegistrarMetadata, xcm_config::AssetType};
 pub use moonbase_runtime::{
-	currency::{GIGAWEI, SUPPLY_FACTOR, UNIT, WEI},
-	AccountId, AssetId, AssetManager, Assets, AuthorInherent, Balance, Balances, CrowdloanRewards,
-	Ethereum, Executive, Header, InflationInfo, LocalAssets, ParachainStaking, Range, Runtime,
-	RuntimeCall, RuntimeEvent, System, TransactionConverter, TransactionPaymentAsGasPrice,
-	UncheckedExtrinsic, HOURS, WEEKS,
+	currency::UNIT, AccountId, AssetId, AssetManager, Assets, AsyncBacking, AuthorInherent,
+	Balance, Ethereum, InflationInfo, ParachainStaking, Range, Runtime, RuntimeCall, RuntimeEvent,
+	System, TransactionConverter, UncheckedExtrinsic, HOURS,
 };
 use nimbus_primitives::{NimbusId, NIMBUS_ENGINE_ID};
-use sp_core::{Encode, H160};
-use sp_runtime::{Digest, DigestItem, Perbill, Percent};
+use polkadot_parachain::primitives::HeadData;
+use sp_consensus_slots::Slot;
+use sp_core::{Encode, Get, H160};
+use sp_runtime::{traits::Dispatchable, BuildStorage, Digest, DigestItem, Perbill, Percent};
 
 use std::collections::BTreeMap;
 
 use fp_rpc::ConvertTransaction;
 use pallet_transaction_payment::Multiplier;
+
+pub fn existential_deposit() -> u128 {
+	<Runtime as pallet_balances::Config>::ExistentialDeposit::get()
+}
 
 // A valid signed Alice transfer.
 pub const VALID_ETH_TX: &str =
@@ -65,7 +68,6 @@ pub fn rpc_run_to_block(n: u32) {
 pub fn run_to_block(n: u32, author: Option<NimbusId>) {
 	// Finalize the first block
 	Ethereum::on_finalize(System::block_number());
-	AuthorInherent::on_finalize(System::block_number());
 	while System::block_number() < n {
 		// Set the new block number and author
 		match author {
@@ -85,6 +87,8 @@ pub fn run_to_block(n: u32, author: Option<NimbusId>) {
 			}
 		}
 
+		increase_last_relay_slot_number(1);
+
 		// Initialize the new block
 		AuthorInherent::on_initialize(System::block_number());
 		ParachainStaking::on_initialize(System::block_number());
@@ -92,7 +96,6 @@ pub fn run_to_block(n: u32, author: Option<NimbusId>) {
 
 		// Finalize the block
 		Ethereum::on_finalize(System::block_number());
-		AuthorInherent::on_finalize(System::block_number());
 		ParachainStaking::on_finalize(System::block_number());
 	}
 }
@@ -113,8 +116,6 @@ pub struct XcmAssetInitialization {
 pub struct ExtBuilder {
 	// endowed accounts with balances
 	balances: Vec<(AccountId, Balance)>,
-	// [asset, Vec<Account, Balance>, owner]
-	local_assets: Vec<(AssetId, Vec<(AccountId, Balance)>, AccountId)>,
 	// [collator, amount]
 	collators: Vec<(AccountId, Balance)>,
 	// [delegator, collator, nomination_amount]
@@ -139,7 +140,6 @@ impl Default for ExtBuilder {
 		ExtBuilder {
 			balances: vec![],
 			delegations: vec![],
-			local_assets: vec![],
 			collators: vec![],
 			inflation: InflationInfo {
 				expect: Range {
@@ -194,14 +194,6 @@ impl ExtBuilder {
 		self
 	}
 
-	pub fn with_local_assets(
-		mut self,
-		local_assets: Vec<(AssetId, Vec<(AccountId, Balance)>, AccountId)>,
-	) -> Self {
-		self.local_assets = local_assets;
-		self
-	}
-
 	pub fn with_xcm_assets(mut self, xcm_assets: Vec<XcmAssetInitialization>) -> Self {
 		self.xcm_assets = xcm_assets;
 		self
@@ -229,8 +221,8 @@ impl ExtBuilder {
 	}
 
 	pub fn build(self) -> sp_io::TestExternalities {
-		let mut t = frame_system::GenesisConfig::default()
-			.build_storage::<Runtime>()
+		let mut t = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
 			.unwrap();
 
 		pallet_balances::GenesisConfig::<Runtime> {
@@ -263,58 +255,40 @@ impl ExtBuilder {
 		.assimilate_storage(&mut t)
 		.unwrap();
 
-		<pallet_ethereum_chain_id::GenesisConfig as GenesisBuild<Runtime>>::assimilate_storage(
-			&pallet_ethereum_chain_id::GenesisConfig {
-				chain_id: self.chain_id,
-			},
-			&mut t,
-		)
-		.unwrap();
+		let genesis_config = pallet_evm_chain_id::GenesisConfig::<Runtime> {
+			chain_id: self.chain_id,
+			..Default::default()
+		};
+		genesis_config.assimilate_storage(&mut t).unwrap();
 
-		<pallet_evm::GenesisConfig as GenesisBuild<Runtime>>::assimilate_storage(
-			&pallet_evm::GenesisConfig {
-				accounts: self.evm_accounts,
-			},
-			&mut t,
-		)
-		.unwrap();
+		let genesis_config = pallet_evm::GenesisConfig::<Runtime> {
+			accounts: self.evm_accounts,
+			..Default::default()
+		};
+		genesis_config.assimilate_storage(&mut t).unwrap();
 
-		<pallet_ethereum::GenesisConfig as GenesisBuild<Runtime>>::assimilate_storage(
-			&pallet_ethereum::GenesisConfig {},
-			&mut t,
-		)
-		.unwrap();
+		let genesis_config = pallet_ethereum::GenesisConfig::<Runtime> {
+			..Default::default()
+		};
+		genesis_config.assimilate_storage(&mut t).unwrap();
 
-		<pallet_xcm::GenesisConfig as GenesisBuild<Runtime>>::assimilate_storage(
-			&pallet_xcm::GenesisConfig {
-				safe_xcm_version: self.safe_xcm_version,
-			},
-			&mut t,
-		)
-		.unwrap();
+		let genesis_config = pallet_xcm::GenesisConfig::<Runtime> {
+			safe_xcm_version: self.safe_xcm_version,
+			..Default::default()
+		};
+		genesis_config.assimilate_storage(&mut t).unwrap();
 
-		<pallet_transaction_payment::GenesisConfig as GenesisBuild<Runtime>>::assimilate_storage(
-			&pallet_transaction_payment::GenesisConfig {
-				multiplier: Multiplier::from(8u128),
-			},
-			&mut t,
-		)
-		.unwrap();
+		let genesis_config = pallet_transaction_payment::GenesisConfig::<Runtime> {
+			multiplier: Multiplier::from(8u128),
+			..Default::default()
+		};
+		genesis_config.assimilate_storage(&mut t).unwrap();
 
 		let mut ext = sp_io::TestExternalities::new(t);
 
-		let local_assets = self.local_assets.clone();
 		let xcm_assets = self.xcm_assets.clone();
 
 		ext.execute_with(|| {
-			// If any local assets specified, we create them here
-			for (asset_id, balances, owner) in local_assets.clone() {
-				LocalAssets::force_create(root_origin(), asset_id.into(), owner, true, 1).unwrap();
-				for (account, balance) in balances {
-					LocalAssets::mint(origin_of(owner.into()), asset_id.into(), account, balance)
-						.unwrap();
-				}
-			}
 			// If any xcm assets specified, we register them here
 			for xcm_asset_initialization in xcm_assets {
 				let asset_id: AssetId = xcm_asset_initialization.asset_type.clone().into();
@@ -362,14 +336,38 @@ pub fn root_origin() -> <Runtime as frame_system::Config>::RuntimeOrigin {
 	<Runtime as frame_system::Config>::RuntimeOrigin::root()
 }
 
+pub fn unchecked_eth_tx(raw_hex_tx: &str) -> UncheckedExtrinsic {
+	let converter = TransactionConverter;
+	converter.convert_transaction(ethereum_transaction(raw_hex_tx))
+}
+
+pub fn ethereum_transaction(raw_hex_tx: &str) -> pallet_ethereum::Transaction {
+	let bytes = hex::decode(raw_hex_tx).expect("Transaction bytes.");
+	let transaction = ethereum::EnvelopedDecodable::decode(&bytes[..]);
+	assert!(transaction.is_ok());
+	transaction.unwrap()
+}
+
 /// Mock the inherent that sets validation data in ParachainSystem, which
 /// contains the `relay_chain_block_number`, which is used in `author-filter` as a
 /// source of randomness to filter valid authors at each block.
 pub fn set_parachain_inherent_data() {
 	use cumulus_primitives_core::PersistedValidationData;
 	use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
-	let (relay_parent_storage_root, relay_chain_state) =
-		RelayStateSproofBuilder::default().into_state_root_and_proof();
+
+	let mut relay_sproof = RelayStateSproofBuilder::default();
+	relay_sproof.para_id = 100u32.into();
+	relay_sproof.included_para_head = Some(HeadData(vec![1, 2, 3]));
+
+	let additional_key_values = vec![(
+		moonbeam_core_primitives::well_known_relay_keys::TIMESTAMP_NOW.to_vec(),
+		sp_timestamp::Timestamp::default().encode(),
+	)];
+
+	relay_sproof.additional_key_values = additional_key_values;
+
+	let (relay_parent_storage_root, relay_chain_state) = relay_sproof.into_state_root_and_proof();
+
 	let vfp = PersistedValidationData {
 		relay_parent_number: 1u32,
 		relay_parent_storage_root,
@@ -389,14 +387,10 @@ pub fn set_parachain_inherent_data() {
 	.dispatch(inherent_origin()));
 }
 
-pub fn unchecked_eth_tx(raw_hex_tx: &str) -> UncheckedExtrinsic {
-	let converter = TransactionConverter;
-	converter.convert_transaction(ethereum_transaction(raw_hex_tx))
-}
-
-pub fn ethereum_transaction(raw_hex_tx: &str) -> pallet_ethereum::Transaction {
-	let bytes = hex::decode(raw_hex_tx).expect("Transaction bytes.");
-	let transaction = ethereum::EnvelopedDecodable::decode(&bytes[..]);
-	assert!(transaction.is_ok());
-	transaction.unwrap()
+pub(crate) fn increase_last_relay_slot_number(amount: u64) {
+	let last_relay_slot = u64::from(AsyncBacking::slot_info().unwrap_or_default().0);
+	frame_support::storage::unhashed::put(
+		&frame_support::storage::storage_prefix(b"AsyncBacking", b"SlotInfo"),
+		&((Slot::from(last_relay_slot + amount), 0)),
+	);
 }

@@ -7,19 +7,19 @@ import { ApiPromise } from "@polkadot/api";
 import { rateLimiter } from "../../helpers/common.js";
 
 describeSuite({
-  id: "S1600",
+  id: "S17",
   title: "Verify account proxies created",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     const proxiesPerAccount: { [account: string]: PalletProxyProxyDefinition[] } = {};
-    const proxyAccList = [];
+    const proxyAccList: string[] = [];
     const limiter = rateLimiter();
     let atBlockNumber: number = 0;
-    let apiAt: ApiDecoration<"promise"> = null;
+    let apiAt: ApiDecoration<"promise">;
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       const limit = 1000;
       let last_key = "";
       let count = 0;
@@ -33,8 +33,8 @@ describeSuite({
       apiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
 
       // TEMPLATE: query the data
-      while (true) {
-        let query = await apiAt.query.proxy.proxies.entriesPaged({
+      for (;;) {
+        const query = await apiAt.query.proxy.proxies.entriesPaged({
           args: [],
           pageSize: limit,
           startKey: last_key,
@@ -47,7 +47,7 @@ describeSuite({
 
         // TEMPLATE: convert the data into the format you want (usually a dictionary per account)
         for (const proxyData of query) {
-          let accountId = `0x${proxyData[0].toHex().slice(-40)}`;
+          const accountId = `0x${proxyData[0].toHex().slice(-40)}`;
           last_key = proxyData[0].toString();
           proxiesPerAccount[accountId] = proxyData[1][0].toArray();
           proxyAccList.push(accountId);

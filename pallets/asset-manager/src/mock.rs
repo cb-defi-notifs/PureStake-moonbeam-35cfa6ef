@@ -18,33 +18,26 @@ use super::*;
 use crate as pallet_asset_manager;
 use parity_scale_codec::{Decode, Encode};
 
-use frame_support::{
-	construct_runtime, parameter_types, traits::Everything, weights::Weight, RuntimeDebug,
-};
+use frame_support::{construct_runtime, parameter_types, traits::Everything, weights::Weight};
 use frame_system::EnsureRoot;
 use scale_info::TypeInfo;
-use sp_core::H256;
+use sp_core::{RuntimeDebug, H256};
 use sp_runtime::traits::Hash as THash;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
-use sp_runtime::DispatchError;
-use xcm::latest::prelude::*;
+use sp_runtime::{BuildStorage, DispatchError};
+use xcm::v3::prelude::*;
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 pub type AccountId = u64;
 pub type Balance = u64;
-pub type BlockNumber = u32;
 
 construct_runtime!(
-	pub enum Test where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
+	pub enum Test
 	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		AssetManager: pallet_asset_manager::{Pallet, Call, Storage, Event<T>},
+		System: frame_system,
+		Balances: pallet_balances,
+		AssetManager: pallet_asset_manager,
 	}
 );
 
@@ -57,13 +50,13 @@ impl frame_system::Config for Test {
 	type BlockLength = ();
 	type RuntimeOrigin = RuntimeOrigin;
 	type RuntimeCall = RuntimeCall;
-	type Index = u64;
-	type BlockNumber = BlockNumber;
+	type RuntimeTask = RuntimeTask;
+	type Nonce = u64;
+	type Block = Block;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = sp_runtime::generic::Header<BlockNumber, BlakeTwo256>;
 	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = BlockHashCount;
 	type DbWeight = ();
@@ -79,7 +72,7 @@ impl frame_system::Config for Test {
 }
 
 parameter_types! {
-	pub const ExistentialDeposit: u64 = 1;
+	pub const ExistentialDeposit: u64 = 0;
 }
 
 impl pallet_balances::Config for Test {
@@ -92,6 +85,10 @@ impl pallet_balances::Config for Test {
 	type MaxLocks = ();
 	type MaxReserves = ();
 	type ReserveIdentifier = [u8; 8];
+	type RuntimeHoldReason = ();
+	type FreezeIdentifier = ();
+	type MaxFreezes = ();
+	type RuntimeFreezeReason = ();
 }
 
 parameter_types! {
@@ -110,7 +107,7 @@ parameter_types! {
 pub type AssetId = u128;
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub enum MockAssetType {
-	Xcm(MultiLocation),
+	Xcm(Location),
 	MockAsset(AssetId),
 }
 
@@ -134,14 +131,14 @@ impl From<MockAssetType> for AssetId {
 	}
 }
 
-impl From<MultiLocation> for MockAssetType {
-	fn from(location: MultiLocation) -> Self {
+impl From<Location> for MockAssetType {
+	fn from(location: Location) -> Self {
 		Self::Xcm(location)
 	}
 }
 
-impl Into<Option<MultiLocation>> for MockAssetType {
-	fn into(self) -> Option<MultiLocation> {
+impl Into<Option<Location>> for MockAssetType {
+	fn into(self) -> Option<Location> {
 		match self {
 			Self::Xcm(location) => Some(location),
 			_ => None,
@@ -161,40 +158,13 @@ impl AssetRegistrar<Test> for MockAssetPalletRegistrar {
 		Ok(())
 	}
 
-	fn create_local_asset(
-		_asset: u128,
-		_account: u64,
-		_min_balance: u64,
-		_is_sufficient: bool,
-		_owner: u64,
-	) -> sp_runtime::DispatchResult {
-		Ok(())
-	}
-
 	fn destroy_foreign_asset(_asset: u128) -> Result<(), DispatchError> {
-		Ok(())
-	}
-
-	fn destroy_local_asset(_asset: u128) -> Result<(), DispatchError> {
 		Ok(())
 	}
 
 	fn destroy_asset_dispatch_info_weight(_asset: u128) -> Weight {
 		Weight::from_parts(0, 0)
 	}
-}
-
-pub struct MockLocalAssetIdCreator;
-impl pallet_asset_manager::LocalAssetIdCreator<Test> for MockLocalAssetIdCreator {
-	fn create_asset_id_from_metadata(local_asset_counter: u128) -> AssetId {
-		// Our means of converting a creator to an assetId
-		// We basically hash nonce+account
-		local_asset_counter
-	}
-}
-
-parameter_types! {
-	pub const LocalAssetDeposit: u64 = 1;
 }
 
 impl Config for Test {
@@ -205,10 +175,6 @@ impl Config for Test {
 	type ForeignAssetType = MockAssetType;
 	type AssetRegistrar = MockAssetPalletRegistrar;
 	type ForeignAssetModifierOrigin = EnsureRoot<u64>;
-	type LocalAssetModifierOrigin = EnsureRoot<u64>;
-	type LocalAssetIdCreator = MockLocalAssetIdCreator;
-	type Currency = Balances;
-	type LocalAssetDeposit = LocalAssetDeposit;
 	type WeightInfo = ();
 }
 
@@ -224,13 +190,9 @@ impl Default for ExtBuilder {
 }
 
 impl ExtBuilder {
-	pub(crate) fn with_balances(mut self, balances: Vec<(AccountId, Balance)>) -> Self {
-		self.balances = balances;
-		self
-	}
 	pub(crate) fn build(self) -> sp_io::TestExternalities {
-		let mut t = frame_system::GenesisConfig::default()
-			.build_storage::<Test>()
+		let mut t = frame_system::GenesisConfig::<Test>::default()
+			.build_storage()
 			.expect("Frame system builds valid default genesis config");
 
 		pallet_balances::GenesisConfig::<Test> {

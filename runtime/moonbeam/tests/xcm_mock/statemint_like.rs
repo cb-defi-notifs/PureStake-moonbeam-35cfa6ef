@@ -17,15 +17,15 @@
 //! Relay chain runtime mock.
 
 use frame_support::{
-	construct_runtime, match_types, parameter_types,
-	traits::{AsEnsureOriginWithArg, Everything, Nothing},
+	construct_runtime, parameter_types,
+	traits::{AsEnsureOriginWithArg, Contains, Everything, Nothing},
 	weights::Weight,
 };
 use frame_system::{EnsureRoot, EnsureSigned};
 
 use sp_core::H256;
 use sp_runtime::{
-	traits::{BlakeTwo256, ConstU32, Hash, IdentityLookup},
+	traits::{ConstU32, Hash, IdentityLookup},
 	AccountId32,
 };
 
@@ -39,7 +39,7 @@ use xcm::VersionedXcm;
 use xcm_builder::{
 	AccountId32Aliases, AllowKnownQueryResponses, AllowSubscriptionsFrom,
 	AllowTopLevelPaidExecutionFrom, AllowUnpaidExecutionFrom, AsPrefixedGeneralIndex,
-	ConvertedConcreteId, CurrencyAdapter, EnsureXcmOrigin, FixedRateOfFungible, FixedWeightBounds,
+	ConvertedConcreteId, EnsureXcmOrigin, FixedRateOfFungible, FixedWeightBounds, FungibleAdapter,
 	FungiblesAdapter, IsConcrete, NoChecking, ParentAsSuperuser, ParentIsPreset,
 	RelayChainAsNative, SiblingParachainAsNative, SiblingParachainConvertsVia,
 	SignedAccountId32AsNative, SignedToAccountId32, SovereignSignedViaLocation, TakeWeightCredit,
@@ -52,7 +52,6 @@ use xcm_simulator::{
 pub type AccountId = AccountId32;
 pub type Balance = u128;
 pub type AssetId = u128;
-pub type BlockNumber = u32;
 
 parameter_types! {
 	pub const BlockHashCount: u32 = 250;
@@ -61,13 +60,13 @@ parameter_types! {
 impl frame_system::Config for Runtime {
 	type RuntimeOrigin = RuntimeOrigin;
 	type RuntimeCall = RuntimeCall;
-	type Index = u64;
-	type BlockNumber = BlockNumber;
+	type RuntimeTask = RuntimeTask;
+	type Nonce = u64;
+	type Block = Block;
 	type Hash = H256;
 	type Hashing = ::sp_runtime::traits::BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = sp_runtime::generic::Header<BlockNumber, BlakeTwo256>;
 	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = BlockHashCount;
 	type BlockWeights = ();
@@ -101,6 +100,23 @@ impl pallet_balances::Config for Runtime {
 	type WeightInfo = ();
 	type MaxReserves = MaxReserves;
 	type ReserveIdentifier = [u8; 8];
+	type RuntimeHoldReason = ();
+	type FreezeIdentifier = ();
+	type MaxFreezes = ();
+	type RuntimeFreezeReason = ();
+}
+
+// Required for runtime benchmarks
+pallet_assets::runtime_benchmarks_enabled! {
+	pub struct BenchmarkHelper;
+	impl<AssetIdParameter> pallet_assets::BenchmarkHelper<AssetIdParameter> for BenchmarkHelper
+	where
+		AssetIdParameter: From<u128>,
+	{
+		fn create_asset_id_parameter(id: u32) -> AssetIdParameter {
+			(id as u128).into()
+		}
+	}
 }
 
 parameter_types! {
@@ -134,21 +150,24 @@ impl pallet_assets::Config for Runtime {
 	type AssetIdParameter = AssetId;
 	type CreateOrigin = AsEnsureOriginWithArg<EnsureSigned<AccountId>>;
 	type CallbackHandle = ();
+	pallet_assets::runtime_benchmarks_enabled! {
+		type BenchmarkHelper = BenchmarkHelper;
+	}
 }
 
 parameter_types! {
-	pub const KsmLocation: MultiLocation = MultiLocation::parent();
+	pub const KsmLocation: Location = Location::parent();
 	pub const RelayNetwork: NetworkId = NetworkId::Kusama;
 	pub RelayChainOrigin: RuntimeOrigin = cumulus_pallet_xcm::Origin::Relay.into();
-	pub UniversalLocation: InteriorMultiLocation =
-		X2(GlobalConsensus(RelayNetwork::get()), Parachain(MsgQueue::parachain_id().into()));
-	pub Local: MultiLocation = Here.into();
+	pub UniversalLocation: InteriorLocation =
+		[GlobalConsensus(RelayNetwork::get()), Parachain(MsgQueue::parachain_id().into())].into();
+	pub Local: Location = Here.into();
 	pub CheckingAccount: AccountId = PolkadotXcm::check_account();
 	pub KsmPerSecond: (xcm::latest::prelude::AssetId, u128, u128) =
-		(Concrete(KsmLocation::get()), 1, 1);
+		(AssetId(KsmLocation::get()), 1, 1);
 }
 
-/// Type for specifying how a `MultiLocation` can be converted into an `AccountId`. This is used
+/// Type for specifying how a `Location` can be converted into an `AccountId`. This is used
 /// when determining ownership of accounts for asset transacting and when attempting to use XCM
 /// `Transact` in order to determine the dispatch Origin.
 pub type LocationToAccountId = (
@@ -161,12 +180,12 @@ pub type LocationToAccountId = (
 );
 
 /// Means for transacting the native currency on this chain.
-pub type CurrencyTransactor = CurrencyAdapter<
+pub type CurrencyTransactor = FungibleAdapter<
 	// Use this currency:
 	Balances,
 	// Use this currency when it is a fungible asset matching the given location or name:
 	IsConcrete<KsmLocation>,
-	// Convert an XCM MultiLocation into a local account id:
+	// Convert an XCM Location into a local account id:
 	LocationToAccountId,
 	// Our chain's account ID type (we can't get away without mentioning it explicitly):
 	AccountId,
@@ -185,7 +204,7 @@ pub type FungiblesTransactor = FungiblesAdapter<
 		AsPrefixedGeneralIndex<PrefixChanger, AssetId, JustTry>,
 		JustTry,
 	>,
-	// Convert an XCM MultiLocation into a local account id:
+	// Convert an XCM Location into a local account id:
 	LocationToAccountId,
 	// Our chain's account ID type (we can't get away without mentioning it explicitly):
 	AccountId,
@@ -228,17 +247,28 @@ parameter_types! {
 	pub const MaxInstructions: u32 = 100;
 }
 
-match_types! {
-	pub type ParentOrParentsExecutivePlurality: impl Contains<MultiLocation> = {
-		MultiLocation { parents: 1, interior: Here } |
-		MultiLocation { parents: 1, interior: X1(Plurality { id: BodyId::Executive, .. }) }
-	};
+pub struct ParentOrParentsExecutivePlurality;
+impl Contains<Location> for ParentOrParentsExecutivePlurality {
+	fn contains(location: &Location) -> bool {
+		matches!(
+			location.unpack(),
+			(1, [])
+				| (
+					1,
+					[Plurality {
+						id: BodyId::Executive,
+						..
+					}]
+				)
+		)
+	}
 }
-match_types! {
-	pub type ParentOrSiblings: impl Contains<MultiLocation> = {
-		MultiLocation { parents: 1, interior: Here } |
-		MultiLocation { parents: 1, interior: X1(_) }
-	};
+
+pub struct ParentOrSiblings;
+impl Contains<Location> for ParentOrSiblings {
+	fn contains(location: &Location) -> bool {
+		matches!(location.unpack(), (1, []) | (1, [_]))
+	}
 }
 
 pub type Barrier = (
@@ -253,7 +283,7 @@ pub type Barrier = (
 );
 
 parameter_types! {
-	pub MatcherLocation: MultiLocation = MultiLocation::here();
+	pub MatcherLocation: Location = Location::here();
 	pub const MaxAssetsIntoHolding: u32 = 64;
 }
 
@@ -283,7 +313,9 @@ impl Config for XcmConfig {
 	type MessageExporter = ();
 	type UniversalAliases = Nothing;
 	type SafeCallFilter = Everything;
-	type AssetIsBurnable = Everything;
+	type Aliasers = Nothing;
+
+	type TransactionalProcessor = ();
 }
 
 /// No local origins on this chain are allowed to dispatch XCM sends/executions.
@@ -312,6 +344,9 @@ impl pallet_xcm::Config for Runtime {
 	type SovereignAccountOf = ();
 	type MaxLockers = ConstU32<8>;
 	type WeightInfo = pallet_xcm::TestWeightInfo;
+	type MaxRemoteLockConsumers = ConstU32<0>;
+	type RemoteLockConsumerIdentifier = ();
+	type AdminOrigin = frame_system::EnsureRoot<AccountId>;
 }
 
 impl cumulus_pallet_xcm::Config for Runtime {
@@ -384,15 +419,25 @@ pub mod mock_msg_queue {
 			let hash = Encode::using_encoded(&xcm, T::Hashing::hash);
 			let (result, event) = match Xcm::<T::RuntimeCall>::try_from(xcm) {
 				Ok(xcm) => {
-					let location = MultiLocation::new(1, Junctions::X1(Parachain(sender.into())));
+					let location = Location::new(1, [Parachain(sender.into())]);
 					let mut id = [0u8; 32];
 					id.copy_from_slice(hash.as_ref());
-					match T::XcmExecutor::execute_xcm(location, xcm, id, max_weight) {
-						Outcome::Error(e) => (Err(e.clone()), Event::Fail(Some(hash), e)),
-						Outcome::Complete(w) => (Ok(w), Event::Success(Some(hash))),
+					match T::XcmExecutor::prepare_and_execute(
+						location,
+						xcm,
+						&mut id,
+						max_weight,
+						Weight::zero(),
+					) {
+						Outcome::Error { error } => {
+							(Err(error.clone()), Event::Fail(Some(hash), error))
+						}
+						Outcome::Complete { used } => (Ok(used), Event::Success(Some(hash))),
 						// As far as the caller is concerned, this was dispatched without error, so
 						// we just report the weight used.
-						Outcome::Incomplete(w, e) => (Ok(w), Event::Fail(Some(hash), e)),
+						Outcome::Incomplete { used, error } => {
+							(Ok(used), Event::Fail(Some(hash), error))
+						}
 					}
 				}
 				Err(()) => (
@@ -436,7 +481,7 @@ pub mod mock_msg_queue {
 			limit: Weight,
 		) -> Weight {
 			for (_i, (_sent_at, data)) in iter.enumerate() {
-				let id = sp_io::hashing::blake2_256(&data[..]);
+				let mut id = sp_io::hashing::blake2_256(&data[..]);
 				let maybe_msg = VersionedXcm::<T::RuntimeCall>::decode(&mut &data[..])
 					.map(Xcm::<T::RuntimeCall>::try_from);
 				match maybe_msg {
@@ -447,7 +492,14 @@ pub mod mock_msg_queue {
 						Self::deposit_event(Event::UnsupportedVersion(id));
 					}
 					Ok(Ok(x)) => {
-						let outcome = T::XcmExecutor::execute_xcm(Parent, x, id, limit);
+						let outcome = T::XcmExecutor::prepare_and_execute(
+							Parent,
+							x,
+							&mut id,
+							limit,
+							Weight::zero(),
+						);
+
 						Self::deposit_event(Event::ExecutedDownward(id, outcome));
 					}
 				}
@@ -481,10 +533,10 @@ pub mod mock_statemint_prefix {
 
 	#[pallet::storage]
 	#[pallet::getter(fn current_prefix)]
-	pub(super) type CurrentPrefix<T: Config> = StorageValue<_, MultiLocation, ValueQuery>;
+	pub(super) type CurrentPrefix<T: Config> = StorageValue<_, Location, ValueQuery>;
 
-	impl<T: Config> Get<MultiLocation> for Pallet<T> {
-		fn get() -> MultiLocation {
+	impl<T: Config> Get<Location> for Pallet<T> {
+		fn get() -> Location {
 			Self::current_prefix()
 		}
 	}
@@ -493,11 +545,11 @@ pub mod mock_statemint_prefix {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		// Changed Prefix
-		PrefixChanged(MultiLocation),
+		PrefixChanged(Location),
 	}
 
 	impl<T: Config> Pallet<T> {
-		pub fn set_prefix(prefix: MultiLocation) {
+		pub fn set_prefix(prefix: Location) {
 			CurrentPrefix::<T>::put(&prefix);
 			Self::deposit_event(Event::PrefixChanged(prefix));
 		}
@@ -508,21 +560,16 @@ impl mock_statemint_prefix::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 }
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;
-type Block = frame_system::mocking::MockBlock<Runtime>;
+type Block = frame_system::mocking::MockBlockU32<Runtime>;
 construct_runtime!(
-	pub enum Runtime where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
-	{
-		System: frame_system::{Pallet, Call, Storage, Config, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		PolkadotXcm: pallet_xcm::{Pallet, Call, Storage, Event<T>, Origin},
-		CumulusXcm: cumulus_pallet_xcm::{Pallet, Event<T>, Origin},
-		MsgQueue: mock_msg_queue::{Pallet, Storage, Event<T>},
-		Assets: pallet_assets::{Pallet, Storage, Event<T>},
-		PrefixChanger: mock_statemint_prefix::{Pallet, Storage, Event<T>},
+	pub enum Runtime	{
+		System: frame_system,
+		Balances: pallet_balances,
+		PolkadotXcm: pallet_xcm,
+		CumulusXcm: cumulus_pallet_xcm,
+		MsgQueue: mock_msg_queue,
+		Assets: pallet_assets,
+		PrefixChanger: mock_statemint_prefix,
 
 	}
 );

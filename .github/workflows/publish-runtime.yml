@@ -17,14 +17,14 @@ jobs:
   setup-scripts:
     runs-on: bare-metal
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Upload scripts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: original-scripts
           path: scripts
       - name: Upload tools
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: original-tools
           path: tools
@@ -36,27 +36,27 @@ jobs:
       matrix:
         chain: ["moonbase", "moonriver", "moonbeam"]
         srtool_image:
-          - purestake/srtool
+          - moonbeamfoundation/srtool
         srtool_image_tag:
-          - 1.69.0
+          - 1.74.0
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.to }}
       - name: Login to DockerHub
-        uses: docker/login-action@v2.2.0
-        if: github.repository == 'purestake/moonbeam'
+        uses: docker/login-action@v3
+        if: github.repository == 'moonbeam-foundation/moonbeam'
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.MBF_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.MBF_DOCKERHUB_PASSWORD }}
           registry: index.docker.io
       - name: Download original scripts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: original-scripts
           path: original-scripts
-      - name: Build & Push purestake/srtool image
-        if: github.repository == 'purestake/moonbeam'
+      - name: Build & Push moonbeamfoundation/srtool image
+        if: github.repository == 'moonbeam-foundation/moonbeam'
         run: |
           docker pull "${{ matrix.srtool_image }}:${{ matrix.srtool_image_tag }}" && image_exists=true || image_exists=false
 
@@ -91,7 +91,7 @@ jobs:
           cat ${{ matrix.chain }}-srtool-digest.json
           cp ${{ steps.srtool_build.outputs.wasm_compressed }} ${{ matrix.chain }}-runtime.compact.compressed.wasm
       - name: Archive Artifacts for ${{ matrix.chain }}
-        uses: actions/upload-artifact@v3.1.2
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.chain }}-runtime
           path: |
@@ -116,31 +116,31 @@ jobs:
       asset_upload_url: ${{ steps.create-release.outputs.upload_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.to }}
           fetch-depth: 0
       - name: Download moonbase runtime
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: moonbase-runtime
           path: build
       - name: Download moonriver runtime
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: moonriver-runtime
           path: build
       - name: Download moonbeam runtime
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: moonbeam-runtime
           path: build
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.10.0
       - name: Download Original Tools
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: original-tools
           path: original-tools

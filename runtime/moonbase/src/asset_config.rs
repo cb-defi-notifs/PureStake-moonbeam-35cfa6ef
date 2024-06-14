@@ -17,14 +17,15 @@
 //! Asset configuration for Moonbase.
 //!
 
+use crate::OpenTechCommitteeInstance;
+
 use super::{
 	currency, governance, xcm_config, AccountId, AssetId, AssetManager, Assets, Balance, Balances,
-	CouncilInstance, LocalAssets, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin,
-	FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX, LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX,
+	Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX,
 };
 
-use pallet_evm_precompileset_assets_erc20::AccountIdAssetIdConversion;
-use sp_runtime::traits::Hash as THash;
+use moonbeam_runtime_common::weights as moonbeam_weights;
+use moonkit_xcm_primitives::AccountIdAssetIdConversion;
 
 use frame_support::{
 	dispatch::GetDispatchInfo,
@@ -36,7 +37,7 @@ use frame_support::{
 use frame_system::{EnsureNever, EnsureRoot};
 use parity_scale_codec::{Compact, Decode, Encode};
 use scale_info::TypeInfo;
-use sp_core::{H160, H256};
+use sp_core::H160;
 
 use sp_std::{
 	convert::{From, Into},
@@ -53,13 +54,10 @@ const REMOVE_ITEMS_LIMIT: u32 = 656;
 
 // Not to disrupt the previous asset instance, we assign () to Foreign
 pub type ForeignAssetInstance = ();
-pub type LocalAssetInstance = pallet_assets::Instance1;
 
 // For foreign assets, these parameters dont matter much
 // as this will only be called by root with the forced arguments
 // No deposit is substracted with those methods
-// For local assets, they do matter. We use similar parameters
-// to those in statemine (except for approval)
 parameter_types! {
 	pub const AssetDeposit: Balance = 100 * currency::UNIT * currency::SUPPLY_FACTOR;
 	pub const ApprovalDeposit: Balance = 0;
@@ -68,14 +66,9 @@ parameter_types! {
 	pub const MetadataDepositPerByte: Balance = currency::deposit(0, 1);
 }
 
-/// We allow root and Chain council to execute privileged asset operations.
-pub type AssetsForceOrigin = EitherOfDiverse<
-	EnsureRoot<AccountId>,
-	EitherOfDiverse<
-		pallet_collective::EnsureProportionMoreThan<AccountId, CouncilInstance, 1, 2>,
-		governance::custom_origins::GeneralAdmin,
-	>,
->;
+/// We allow Root and General Admin to execute privileged asset operations.
+pub type AssetsForceOrigin =
+	EitherOfDiverse<EnsureRoot<AccountId>, governance::custom_origins::GeneralAdmin>;
 
 // Required for runtime benchmarks
 pallet_assets::runtime_benchmarks_enabled! {
@@ -105,32 +98,7 @@ impl pallet_assets::Config<ForeignAssetInstance> for Runtime {
 	type Freezer = ();
 	type Extra = ();
 	type AssetAccountDeposit = ConstU128<{ currency::deposit(1, 18) }>;
-	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
-	type RemoveItemsLimit = ConstU32<{ REMOVE_ITEMS_LIMIT }>;
-	type AssetIdParameter = Compact<AssetId>;
-	type CreateOrigin = AsEnsureOriginWithArg<EnsureNever<AccountId>>;
-	type CallbackHandle = ();
-	pallet_assets::runtime_benchmarks_enabled! {
-		type BenchmarkHelper = BenchmarkHelper;
-	}
-}
-
-// Local assets
-impl pallet_assets::Config<LocalAssetInstance> for Runtime {
-	type RuntimeEvent = RuntimeEvent;
-	type Balance = Balance;
-	type AssetId = AssetId;
-	type Currency = Balances;
-	type ForceOrigin = AssetsForceOrigin;
-	type AssetDeposit = AssetDeposit;
-	type MetadataDepositBase = MetadataDepositBase;
-	type MetadataDepositPerByte = MetadataDepositPerByte;
-	type ApprovalDeposit = ApprovalDeposit;
-	type StringLimit = AssetsStringLimit;
-	type Freezer = ();
-	type Extra = ();
-	type AssetAccountDeposit = ConstU128<{ currency::deposit(1, 18) }>;
-	type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = moonbeam_weights::pallet_assets::WeightInfo<Runtime>;
 	type RemoveItemsLimit = ConstU32<{ REMOVE_ITEMS_LIMIT }>;
 	type AssetIdParameter = Compact<AssetId>;
 	type CreateOrigin = AsEnsureOriginWithArg<EnsureNever<AccountId>>;
@@ -161,15 +129,6 @@ impl pallet_asset_manager::AssetRegistrar<Runtime> for AssetRegistrar {
 			min_balance,
 		)?;
 
-		// TODO uncomment when we feel comfortable
-		/*
-		// The asset has been created. Let's put the revert code in the precompile address
-		let precompile_address = Runtime::asset_id_to_account(ASSET_PRECOMPILE_ADDRESS_PREFIX, asset);
-		pallet_evm::AccountCodes::<Runtime>::insert(
-			precompile_address,
-			vec![0x60, 0x00, 0x60, 0x00, 0xfd],
-		);*/
-
 		// Lastly, the metadata
 		Assets::force_set_metadata(
 			RuntimeOrigin::root(),
@@ -182,61 +141,9 @@ impl pallet_asset_manager::AssetRegistrar<Runtime> for AssetRegistrar {
 	}
 
 	#[transactional]
-	fn create_local_asset(
-		asset: AssetId,
-		_creator: AccountId,
-		min_balance: Balance,
-		is_sufficient: bool,
-		owner: AccountId,
-	) -> DispatchResult {
-		// We create with root, because we need to decide whether we want to create the asset
-		// as sufficient. Take into account this does not hold any reserved amount
-		// in pallet-assets
-		LocalAssets::force_create(
-			RuntimeOrigin::root(),
-			asset.into(),
-			owner,
-			is_sufficient,
-			min_balance,
-		)?;
-
-		// No metadata needs to be set, as this can be set through regular calls
-
-		// TODO: should we put the revert code?
-		// The asset has been created. Let's put the revert code in the precompile address
-		let precompile_address: H160 =
-			Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, asset).into();
-		pallet_evm::AccountCodes::<Runtime>::insert(
-			precompile_address,
-			vec![0x60, 0x00, 0x60, 0x00, 0xfd],
-		);
-		Ok(())
-	}
-
-	#[transactional]
 	fn destroy_foreign_asset(asset: AssetId) -> DispatchResult {
-		// First destroy the asset
-		Assets::start_destroy(RuntimeOrigin::root(), asset.into())?;
-
-		// We remove the EVM revert code
-		// This does not panick even if there is no code in the address
-		let precompile_address: H160 =
-			Runtime::asset_id_to_account(FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX, asset).into();
-		pallet_evm::AccountCodes::<Runtime>::remove(precompile_address);
-		Ok(())
-	}
-
-	#[transactional]
-	fn destroy_local_asset(asset: AssetId) -> DispatchResult {
-		// First destroy the asset
-		LocalAssets::start_destroy(RuntimeOrigin::root(), asset.into())?;
-
-		// We remove the EVM revert code
-		// This does not panick even if there is no code in the address
-		let precompile_address: H160 =
-			Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, asset).into();
-		pallet_evm::AccountCodes::<Runtime>::remove(precompile_address);
-		Ok(())
+		// Mark the asset as destroying
+		Assets::start_destroy(RuntimeOrigin::root(), asset.into())
 	}
 
 	fn destroy_asset_dispatch_info_weight(asset: AssetId) -> Weight {
@@ -244,33 +151,15 @@ impl pallet_asset_manager::AssetRegistrar<Runtime> for AssetRegistrar {
 		// witness
 		// We need to take the dispatch info from the destroy call, which is already annotated in
 		// the assets pallet
-		// Additionally, we need to add a DB write for removing the precompile revert code in the
-		// EVM
 
 		// This is the dispatch info of destroy
-		let call_weight = RuntimeCall::Assets(
+		RuntimeCall::Assets(
 			pallet_assets::Call::<Runtime, ForeignAssetInstance>::start_destroy {
 				id: asset.into(),
 			},
 		)
 		.get_dispatch_info()
-		.weight;
-
-		// This is the db write
-		call_weight.saturating_add(<Runtime as frame_system::Config>::DbWeight::get().writes(1))
-	}
-}
-
-pub struct LocalAssetIdCreator;
-impl pallet_asset_manager::LocalAssetIdCreator<Runtime> for LocalAssetIdCreator {
-	fn create_asset_id_from_metadata(local_asset_counter: u128) -> AssetId {
-		// Our means of converting a local asset counter to an assetId
-		// We basically hash (local asset counter)
-		let mut result: [u8; 16] = [0u8; 16];
-		let hash: H256 =
-			local_asset_counter.using_encoded(<Runtime as frame_system::Config>::Hashing::hash);
-		result.copy_from_slice(&hash.as_fixed_bytes()[0..16]);
-		u128::from_le_bytes(result)
+		.weight
 	}
 }
 
@@ -285,14 +174,7 @@ pub struct AssetRegistrarMetadata {
 pub type ForeignAssetModifierOrigin = EitherOfDiverse<
 	EnsureRoot<AccountId>,
 	EitherOfDiverse<
-		pallet_collective::EnsureProportionMoreThan<AccountId, CouncilInstance, 1, 2>,
-		governance::custom_origins::GeneralAdmin,
-	>,
->;
-pub type LocalAssetModifierOrigin = EitherOfDiverse<
-	EnsureRoot<AccountId>,
-	EitherOfDiverse<
-		pallet_collective::EnsureProportionMoreThan<AccountId, CouncilInstance, 1, 2>,
+		pallet_collective::EnsureProportionMoreThan<AccountId, OpenTechCommitteeInstance, 5, 9>,
 		governance::custom_origins::GeneralAdmin,
 	>,
 >;
@@ -305,11 +187,7 @@ impl pallet_asset_manager::Config for Runtime {
 	type ForeignAssetType = xcm_config::AssetType;
 	type AssetRegistrar = AssetRegistrar;
 	type ForeignAssetModifierOrigin = ForeignAssetModifierOrigin;
-	type LocalAssetModifierOrigin = LocalAssetModifierOrigin;
-	type LocalAssetIdCreator = LocalAssetIdCreator;
-	type Currency = Balances;
-	type LocalAssetDeposit = AssetDeposit;
-	type WeightInfo = pallet_asset_manager::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = moonbeam_weights::pallet_asset_manager::WeightInfo<Runtime>;
 }
 
 // Instruct how to go from an H160 to an AssetID
@@ -321,9 +199,7 @@ impl AccountIdAssetIdConversion<AccountId, AssetId> for Runtime {
 		let h160_account: H160 = account.into();
 		let mut data = [0u8; 16];
 		let (prefix_part, id_part) = h160_account.as_fixed_bytes().split_at(4);
-		if prefix_part == FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX
-			|| prefix_part == LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX
-		{
+		if prefix_part == FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX {
 			data.copy_from_slice(id_part);
 			let asset_id: AssetId = u128::from_be_bytes(data).into();
 			Some((prefix_part.to_vec(), asset_id))

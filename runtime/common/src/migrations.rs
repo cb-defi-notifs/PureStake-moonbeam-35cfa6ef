@@ -19,103 +19,42 @@
 //! This module acts as a registry where each migration is defined. Each migration should implement
 //! the "Migration" trait declared in the pallet-migrations crate.
 
-use frame_support::{
-	dispatch::GetStorageVersion,
-	traits::{Hash as PreimageHash, OnRuntimeUpgrade, PalletInfoAccess},
-	weights::Weight,
-};
-use pallet_author_slot_filter::Config as AuthorSlotFilterConfig;
+use frame_support::{traits::OnRuntimeUpgrade, weights::Weight};
+use frame_system::pallet_prelude::BlockNumberFor;
 use pallet_migrations::{GetMigrations, Migration};
-use sp_std::{marker::PhantomData, prelude::*};
+use sp_std::{marker::PhantomData, prelude::*, vec};
 
-pub struct PreimageMigrationHashToBoundedCall<T>(PhantomData<T>);
-impl<T> Migration for PreimageMigrationHashToBoundedCall<T>
+pub struct MigrateToLatestXcmVersion<Runtime>(PhantomData<Runtime>);
+impl<Runtime> Migration for MigrateToLatestXcmVersion<Runtime>
 where
-	T: pallet_preimage::Config<Hash = PreimageHash> + frame_system::Config,
+	pallet_xcm::migration::MigrateToLatestXcmVersion<Runtime>: OnRuntimeUpgrade,
 {
 	fn friendly_name(&self) -> &str {
-		"MM_PreimageMigrationHashToBoundedCall"
+		"MM_MigrateToLatestXcmVersion"
 	}
 
 	fn migrate(&self, _available_weight: Weight) -> Weight {
-		pallet_preimage::migration::v1::Migration::<T>::on_runtime_upgrade()
+		pallet_xcm::migration::MigrateToLatestXcmVersion::<Runtime>::on_runtime_upgrade()
 	}
 
-	/// Run a standard pre-runtime test. This works the same way as in a normal runtime upgrade.
 	#[cfg(feature = "try-runtime")]
-	fn pre_upgrade(&self) -> Result<Vec<u8>, &'static str> {
-		pallet_preimage::migration::v1::Migration::<T>::pre_upgrade()
+	fn pre_upgrade(&self) -> Result<Vec<u8>, sp_runtime::DispatchError> {
+		pallet_xcm::migration::MigrateToLatestXcmVersion::<Runtime>::pre_upgrade()
 	}
 
-	/// Run a standard post-runtime test. This works the same way as in a normal runtime upgrade.
 	#[cfg(feature = "try-runtime")]
-	fn post_upgrade(&self, state: Vec<u8>) -> Result<(), &'static str> {
-		pallet_preimage::migration::v1::Migration::<T>::post_upgrade(state)
+	fn post_upgrade(&self, state: Vec<u8>) -> Result<(), sp_runtime::DispatchError> {
+		pallet_xcm::migration::MigrateToLatestXcmVersion::<Runtime>::post_upgrade(state)
 	}
 }
 
-pub struct PalletReferendaMigrateV0ToV1<T>(pub PhantomData<T>);
-impl<T> Migration for PalletReferendaMigrateV0ToV1<T>
+pub struct CommonMigrations<Runtime>(PhantomData<Runtime>);
+
+impl<Runtime> GetMigrations for CommonMigrations<Runtime>
 where
-	T: pallet_referenda::Config<Hash = PreimageHash> + frame_system::Config,
-{
-	fn friendly_name(&self) -> &str {
-		"MM_PalletReferendaMigrateV0ToV1"
-	}
-
-	fn migrate(&self, _available_weight: Weight) -> Weight {
-		pallet_referenda::migration::v1::MigrateV0ToV1::<T>::on_runtime_upgrade()
-	}
-
-	/// Run a standard pre-runtime test. This works the same way as in a normal runtime upgrade.
-	#[cfg(feature = "try-runtime")]
-	fn pre_upgrade(&self) -> Result<Vec<u8>, &'static str> {
-		pallet_referenda::migration::v1::MigrateV0ToV1::<T>::pre_upgrade()
-	}
-
-	/// Run a standard post-runtime test. This works the same way as in a normal runtime upgrade.
-	#[cfg(feature = "try-runtime")]
-	fn post_upgrade(&self, state: Vec<u8>) -> Result<(), &'static str> {
-		pallet_referenda::migration::v1::MigrateV0ToV1::<T>::post_upgrade(state)
-	}
-}
-
-pub struct ReferendaMigrations<Runtime, Council, Tech>(PhantomData<(Runtime, Council, Tech)>);
-
-impl<Runtime, Council, Tech> GetMigrations for ReferendaMigrations<Runtime, Council, Tech>
-where
-	Runtime: pallet_author_mapping::Config,
-	Runtime: pallet_parachain_staking::Config,
-	Runtime: pallet_scheduler::Config<Hash = PreimageHash>,
-	Runtime: AuthorSlotFilterConfig,
-	Council: GetStorageVersion + PalletInfoAccess + 'static,
-	Tech: GetStorageVersion + PalletInfoAccess + 'static,
-	Runtime: pallet_democracy::Config<Hash = PreimageHash>,
-	Runtime: pallet_preimage::Config<Hash = PreimageHash>,
-	Runtime: pallet_referenda::Config,
-{
-	fn get_migrations() -> Vec<Box<dyn Migration>> {
-		let pallet_referenda_migrate_v0_to_v1 =
-			PalletReferendaMigrateV0ToV1::<Runtime>(Default::default());
-		vec![Box::new(pallet_referenda_migrate_v0_to_v1)]
-	}
-}
-
-pub struct CommonMigrations<Runtime, Council, Tech>(PhantomData<(Runtime, Council, Tech)>);
-
-impl<Runtime, Council, Tech> GetMigrations for CommonMigrations<Runtime, Council, Tech>
-where
-	Runtime: pallet_author_mapping::Config,
-	Runtime: pallet_parachain_staking::Config,
-	Runtime: pallet_scheduler::Config<Hash = PreimageHash>,
-	Runtime: AuthorSlotFilterConfig,
-	Council: GetStorageVersion + PalletInfoAccess + 'static,
-	Tech: GetStorageVersion + PalletInfoAccess + 'static,
-	Runtime: pallet_democracy::Config<Hash = PreimageHash>,
-	Runtime: pallet_preimage::Config<Hash = PreimageHash>,
-	Runtime: pallet_asset_manager::Config,
-	<Runtime as pallet_asset_manager::Config>::ForeignAssetType: From<xcm::v3::MultiLocation>,
-	Runtime: pallet_xcm_transactor::Config,
+	Runtime: pallet_xcm::Config,
+	Runtime::AccountId: Default,
+	BlockNumberFor<Runtime>: Into<u64>,
 {
 	fn get_migrations() -> Vec<Box<dyn Migration>> {
 		// let migration_author_mapping_twox_to_blake = AuthorMappingTwoXToBlake::<Runtime> {
@@ -181,6 +120,17 @@ where
 		//	PalletAssetManagerMigrateXcmV2ToV3::<Runtime>(Default::default());
 		//let xcm_transactor_to_xcm_v3 =
 		//	PalletXcmTransactorMigrateXcmV2ToV3::<Runtime>(Default::default());
+		//let remove_min_bond_for_old_orbiter_collators =
+		//	RemoveMinBondForOrbiterCollators::<Runtime>(Default::default());
+		// let missing_balances_migrations = MissingBalancesMigrations::<Runtime>(Default::default());
+		// let fix_pallet_versions =
+		// 	FixIncorrectPalletVersions::<Runtime, Treasury, OpenTech>(Default::default());
+		// let pallet_referenda_migrate_v0_to_v1 =
+		// 	PalletReferendaMigrateV0ToV1::<Runtime>(Default::default());
+		//let pallet_collective_drop_gov_v1_collectives =
+		//	PalletCollectiveDropGovV1Collectives::<Runtime>(Default::default());
+		//let pallet_staking_round = PalletStakingRoundMigration::<Runtime>(Default::default());
+
 		vec![
 			// completed in runtime 800
 			// Box::new(migration_author_mapping_twox_to_blake),
@@ -225,8 +175,25 @@ where
 			//Box::new(scheduler_to_v4),
 			//Box::new(democracy_migration_hash_to_bounded_call),
 			//Box::new(preimage_migration_hash_to_bounded_call),
+			// completed in runtime 2100
 			//Box::new(asset_manager_to_xcm_v3),
 			//Box::new(xcm_transactor_to_xcm_v3),
+			// completed in runtime 2600
+			//Box::new(remove_min_bond_for_old_orbiter_collators),
+			// completed in runtime 2700
+			// Box::new(missing_balances_migrations),
+			// Box::new(fix_pallet_versions),
+			// Box::new(pallet_referenda_migrate_v0_to_v1),
+			// completed in runtime 2800
+			//Box::new(pallet_collective_drop_gov_v1_collectives),
+			// completed in runtime 2801
+			// Box::new(pallet_staking_round),
+			// Box::new(pallet_collective_drop_gov_v1_collectives),
+			// completed in runtime 2900
+			// Box::new(remove_pallet_democracy),
+			// Box::new(remove_collectives_addresses),
+			// permanent migrations
+			Box::new(MigrateToLatestXcmVersion::<Runtime>(Default::default())),
 		]
 	}
 }

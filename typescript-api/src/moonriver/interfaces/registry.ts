@@ -8,25 +8,25 @@ import "@polkadot/types/types/registry";
 import type {
   AccountEthereumSignature,
   CumulusPalletDmpQueueCall,
-  CumulusPalletDmpQueueConfigData,
-  CumulusPalletDmpQueueError,
   CumulusPalletDmpQueueEvent,
-  CumulusPalletDmpQueuePageIndexData,
+  CumulusPalletDmpQueueMigrationState,
   CumulusPalletParachainSystemCall,
-  CumulusPalletParachainSystemCodeUpgradeAuthorization,
   CumulusPalletParachainSystemError,
   CumulusPalletParachainSystemEvent,
   CumulusPalletParachainSystemRelayStateSnapshotMessagingStateSnapshot,
-  CumulusPalletXcmError,
+  CumulusPalletParachainSystemRelayStateSnapshotRelayDispatchQueueRemainingCapacity,
+  CumulusPalletParachainSystemUnincludedSegmentAncestor,
+  CumulusPalletParachainSystemUnincludedSegmentHrmpChannelUpdate,
+  CumulusPalletParachainSystemUnincludedSegmentSegmentTracker,
+  CumulusPalletParachainSystemUnincludedSegmentUsedBandwidth,
   CumulusPalletXcmEvent,
   CumulusPalletXcmOrigin,
   CumulusPalletXcmpQueueError,
   CumulusPalletXcmpQueueEvent,
-  CumulusPalletXcmpQueueInboundChannelDetails,
-  CumulusPalletXcmpQueueInboundState,
   CumulusPalletXcmpQueueOutboundChannelDetails,
   CumulusPalletXcmpQueueOutboundState,
   CumulusPalletXcmpQueueQueueConfigData,
+  CumulusPrimitivesCoreAggregateMessageOrigin,
   CumulusPrimitivesParachainInherentParachainInherentData,
   EthbloomBloom,
   EthereumBlock,
@@ -56,12 +56,14 @@ import type {
   FrameSupportDispatchPerDispatchClassWeightsPerClass,
   FrameSupportDispatchPostDispatchInfo,
   FrameSupportDispatchRawOrigin,
+  FrameSupportMessagesProcessMessageError,
   FrameSupportPalletId,
   FrameSupportPreimagesBounded,
   FrameSupportScheduleDispatchTime,
   FrameSupportTokensMiscBalanceStatus,
   FrameSystemAccountInfo,
   FrameSystemCall,
+  FrameSystemCodeUpgradeAuthorization,
   FrameSystemError,
   FrameSystemEvent,
   FrameSystemEventRecord,
@@ -81,6 +83,7 @@ import type {
   MoonriverRuntimeOriginCaller,
   MoonriverRuntimeProxyType,
   MoonriverRuntimeRuntime,
+  MoonriverRuntimeRuntimeHoldReason,
   MoonriverRuntimeXcmConfigAssetType,
   MoonriverRuntimeXcmConfigCurrencyId,
   MoonriverRuntimeXcmConfigTransactors,
@@ -88,10 +91,10 @@ import type {
   OrmlXtokensModuleCall,
   OrmlXtokensModuleError,
   OrmlXtokensModuleEvent,
-  PalletAssetManagerAssetInfo,
   PalletAssetManagerCall,
   PalletAssetManagerError,
   PalletAssetManagerEvent,
+  PalletAssetsAccountStatus,
   PalletAssetsApproval,
   PalletAssetsAssetAccount,
   PalletAssetsAssetDetails,
@@ -110,10 +113,12 @@ import type {
   PalletAuthorSlotFilterCall,
   PalletAuthorSlotFilterEvent,
   PalletBalancesAccountData,
+  PalletBalancesAdjustmentDirection,
   PalletBalancesBalanceLock,
   PalletBalancesCall,
   PalletBalancesError,
   PalletBalancesEvent,
+  PalletBalancesIdAmount,
   PalletBalancesReasons,
   PalletBalancesReserveData,
   PalletCollectiveCall,
@@ -136,19 +141,6 @@ import type {
   PalletCrowdloanRewardsError,
   PalletCrowdloanRewardsEvent,
   PalletCrowdloanRewardsRewardInfo,
-  PalletDemocracyCall,
-  PalletDemocracyConviction,
-  PalletDemocracyDelegations,
-  PalletDemocracyError,
-  PalletDemocracyEvent,
-  PalletDemocracyMetadataOwner,
-  PalletDemocracyReferendumInfo,
-  PalletDemocracyReferendumStatus,
-  PalletDemocracyTally,
-  PalletDemocracyVoteAccountVote,
-  PalletDemocracyVotePriorLock,
-  PalletDemocracyVoteThreshold,
-  PalletDemocracyVoteVoting,
   PalletEthereumCall,
   PalletEthereumError,
   PalletEthereumEvent,
@@ -160,21 +152,27 @@ import type {
   PalletEvmCodeMetadata,
   PalletEvmError,
   PalletEvmEvent,
-  PalletIdentityBitFlags,
+  PalletIdentityAuthorityProperties,
   PalletIdentityCall,
   PalletIdentityError,
   PalletIdentityEvent,
-  PalletIdentityIdentityField,
-  PalletIdentityIdentityInfo,
   PalletIdentityJudgement,
+  PalletIdentityLegacyIdentityInfo,
   PalletIdentityRegistrarInfo,
   PalletIdentityRegistration,
   PalletMaintenanceModeCall,
   PalletMaintenanceModeError,
   PalletMaintenanceModeEvent,
-  PalletMigrationsCall,
+  PalletMessageQueueBookState,
+  PalletMessageQueueCall,
+  PalletMessageQueueError,
+  PalletMessageQueueEvent,
+  PalletMessageQueueNeighbours,
+  PalletMessageQueuePage,
   PalletMigrationsError,
   PalletMigrationsEvent,
+  PalletMoonbeamLazyMigrationsCall,
+  PalletMoonbeamLazyMigrationsError,
   PalletMoonbeamOrbitersCall,
   PalletMoonbeamOrbitersCollatorPoolInfo,
   PalletMoonbeamOrbitersCurrentOrbiter,
@@ -207,10 +205,14 @@ import type {
   PalletParachainStakingInflationInflationInfo,
   PalletParachainStakingParachainBondConfig,
   PalletParachainStakingRoundInfo,
+  PalletParachainStakingSetBoundedOrderedSet,
   PalletParachainStakingSetOrderedSet,
+  PalletPrecompileBenchmarksError,
   PalletPreimageCall,
   PalletPreimageError,
   PalletPreimageEvent,
+  PalletPreimageHoldReason,
+  PalletPreimageOldRequestStatus,
   PalletPreimageRequestStatus,
   PalletProxyAnnouncement,
   PalletProxyCall,
@@ -235,6 +237,7 @@ import type {
   PalletReferendaReferendumStatus,
   PalletReferendaTrackInfo,
   PalletRootTestingCall,
+  PalletRootTestingEvent,
   PalletSchedulerCall,
   PalletSchedulerError,
   PalletSchedulerEvent,
@@ -246,7 +249,9 @@ import type {
   PalletTreasuryCall,
   PalletTreasuryError,
   PalletTreasuryEvent,
+  PalletTreasuryPaymentState,
   PalletTreasuryProposal,
+  PalletTreasurySpendStatus,
   PalletUtilityCall,
   PalletUtilityError,
   PalletUtilityEvent,
@@ -266,18 +271,20 @@ import type {
   PalletXcmTransactorEvent,
   PalletXcmTransactorHrmpInitParams,
   PalletXcmTransactorHrmpOperation,
+  PalletXcmTransactorRelayIndicesRelayChainIndices,
   PalletXcmTransactorRemoteTransactInfoWithMaxWeight,
   PalletXcmTransactorTransactWeights,
   PalletXcmVersionMigrationStage,
   PolkadotCorePrimitivesInboundDownwardMessage,
   PolkadotCorePrimitivesInboundHrmpMessage,
   PolkadotCorePrimitivesOutboundHrmpMessage,
-  PolkadotParachainPrimitivesHrmpChannelId,
-  PolkadotParachainPrimitivesXcmpMessageFormat,
-  PolkadotPrimitivesV2AbridgedHostConfiguration,
-  PolkadotPrimitivesV2AbridgedHrmpChannel,
-  PolkadotPrimitivesV2PersistedValidationData,
-  PolkadotPrimitivesV2UpgradeRestriction,
+  PolkadotParachainPrimitivesPrimitivesHrmpChannelId,
+  PolkadotPrimitivesV6AbridgedHostConfiguration,
+  PolkadotPrimitivesV6AbridgedHrmpChannel,
+  PolkadotPrimitivesV6AsyncBackingAsyncBackingParams,
+  PolkadotPrimitivesV6PersistedValidationData,
+  PolkadotPrimitivesV6UpgradeGoAhead,
+  PolkadotPrimitivesV6UpgradeRestriction,
   SessionKeysPrimitivesVrfVrfCryptoPublic,
   SpArithmeticArithmeticError,
   SpCoreEcdsaSignature,
@@ -285,6 +292,7 @@ import type {
   SpCoreSr25519Public,
   SpCoreSr25519Signature,
   SpCoreVoid,
+  SpRuntimeBlakeTwo256,
   SpRuntimeDigest,
   SpRuntimeDigestDigestItem,
   SpRuntimeDispatchError,
@@ -297,6 +305,25 @@ import type {
   SpVersionRuntimeVersion,
   SpWeightsRuntimeDbWeight,
   SpWeightsWeightV2Weight,
+  StagingXcmV3MultiLocation,
+  StagingXcmV4Asset,
+  StagingXcmV4AssetAssetFilter,
+  StagingXcmV4AssetAssetId,
+  StagingXcmV4AssetAssetInstance,
+  StagingXcmV4AssetAssets,
+  StagingXcmV4AssetFungibility,
+  StagingXcmV4AssetWildAsset,
+  StagingXcmV4AssetWildFungibility,
+  StagingXcmV4Instruction,
+  StagingXcmV4Junction,
+  StagingXcmV4JunctionNetworkId,
+  StagingXcmV4Junctions,
+  StagingXcmV4Location,
+  StagingXcmV4PalletInfo,
+  StagingXcmV4QueryResponseInfo,
+  StagingXcmV4Response,
+  StagingXcmV4TraitsOutcome,
+  StagingXcmV4Xcm,
   XcmDoubleEncoded,
   XcmPrimitivesEthereumXcmEthereumXcmFee,
   XcmPrimitivesEthereumXcmEthereumXcmTransaction,
@@ -331,7 +358,6 @@ import type {
   XcmV3Junctions,
   XcmV3MaybeErrorCode,
   XcmV3MultiAsset,
-  XcmV3MultiLocation,
   XcmV3MultiassetAssetId,
   XcmV3MultiassetAssetInstance,
   XcmV3MultiassetFungibility,
@@ -343,13 +369,12 @@ import type {
   XcmV3QueryResponseInfo,
   XcmV3Response,
   XcmV3TraitsError,
-  XcmV3TraitsOutcome,
   XcmV3WeightLimit,
   XcmV3Xcm,
+  XcmVersionedAsset,
   XcmVersionedAssetId,
-  XcmVersionedMultiAsset,
-  XcmVersionedMultiAssets,
-  XcmVersionedMultiLocation,
+  XcmVersionedAssets,
+  XcmVersionedLocation,
   XcmVersionedResponse,
   XcmVersionedXcm,
 } from "@polkadot/types/lookup";
@@ -358,25 +383,25 @@ declare module "@polkadot/types/types/registry" {
   interface InterfaceTypes {
     AccountEthereumSignature: AccountEthereumSignature;
     CumulusPalletDmpQueueCall: CumulusPalletDmpQueueCall;
-    CumulusPalletDmpQueueConfigData: CumulusPalletDmpQueueConfigData;
-    CumulusPalletDmpQueueError: CumulusPalletDmpQueueError;
     CumulusPalletDmpQueueEvent: CumulusPalletDmpQueueEvent;
-    CumulusPalletDmpQueuePageIndexData: CumulusPalletDmpQueuePageIndexData;
+    CumulusPalletDmpQueueMigrationState: CumulusPalletDmpQueueMigrationState;
     CumulusPalletParachainSystemCall: CumulusPalletParachainSystemCall;
-    CumulusPalletParachainSystemCodeUpgradeAuthorization: CumulusPalletParachainSystemCodeUpgradeAuthorization;
     CumulusPalletParachainSystemError: CumulusPalletParachainSystemError;
     CumulusPalletParachainSystemEvent: CumulusPalletParachainSystemEvent;
     CumulusPalletParachainSystemRelayStateSnapshotMessagingStateSnapshot: CumulusPalletParachainSystemRelayStateSnapshotMessagingStateSnapshot;
-    CumulusPalletXcmError: CumulusPalletXcmError;
+    CumulusPalletParachainSystemRelayStateSnapshotRelayDispatchQueueRemainingCapacity: CumulusPalletParachainSystemRelayStateSnapshotRelayDispatchQueueRemainingCapacity;
+    CumulusPalletParachainSystemUnincludedSegmentAncestor: CumulusPalletParachainSystemUnincludedSegmentAncestor;
+    CumulusPalletParachainSystemUnincludedSegmentHrmpChannelUpdate: CumulusPalletParachainSystemUnincludedSegmentHrmpChannelUpdate;
+    CumulusPalletParachainSystemUnincludedSegmentSegmentTracker: CumulusPalletParachainSystemUnincludedSegmentSegmentTracker;
+    CumulusPalletParachainSystemUnincludedSegmentUsedBandwidth: CumulusPalletParachainSystemUnincludedSegmentUsedBandwidth;
     CumulusPalletXcmEvent: CumulusPalletXcmEvent;
     CumulusPalletXcmOrigin: CumulusPalletXcmOrigin;
     CumulusPalletXcmpQueueError: CumulusPalletXcmpQueueError;
     CumulusPalletXcmpQueueEvent: CumulusPalletXcmpQueueEvent;
-    CumulusPalletXcmpQueueInboundChannelDetails: CumulusPalletXcmpQueueInboundChannelDetails;
-    CumulusPalletXcmpQueueInboundState: CumulusPalletXcmpQueueInboundState;
     CumulusPalletXcmpQueueOutboundChannelDetails: CumulusPalletXcmpQueueOutboundChannelDetails;
     CumulusPalletXcmpQueueOutboundState: CumulusPalletXcmpQueueOutboundState;
     CumulusPalletXcmpQueueQueueConfigData: CumulusPalletXcmpQueueQueueConfigData;
+    CumulusPrimitivesCoreAggregateMessageOrigin: CumulusPrimitivesCoreAggregateMessageOrigin;
     CumulusPrimitivesParachainInherentParachainInherentData: CumulusPrimitivesParachainInherentParachainInherentData;
     EthbloomBloom: EthbloomBloom;
     EthereumBlock: EthereumBlock;
@@ -406,12 +431,14 @@ declare module "@polkadot/types/types/registry" {
     FrameSupportDispatchPerDispatchClassWeightsPerClass: FrameSupportDispatchPerDispatchClassWeightsPerClass;
     FrameSupportDispatchPostDispatchInfo: FrameSupportDispatchPostDispatchInfo;
     FrameSupportDispatchRawOrigin: FrameSupportDispatchRawOrigin;
+    FrameSupportMessagesProcessMessageError: FrameSupportMessagesProcessMessageError;
     FrameSupportPalletId: FrameSupportPalletId;
     FrameSupportPreimagesBounded: FrameSupportPreimagesBounded;
     FrameSupportScheduleDispatchTime: FrameSupportScheduleDispatchTime;
     FrameSupportTokensMiscBalanceStatus: FrameSupportTokensMiscBalanceStatus;
     FrameSystemAccountInfo: FrameSystemAccountInfo;
     FrameSystemCall: FrameSystemCall;
+    FrameSystemCodeUpgradeAuthorization: FrameSystemCodeUpgradeAuthorization;
     FrameSystemError: FrameSystemError;
     FrameSystemEvent: FrameSystemEvent;
     FrameSystemEventRecord: FrameSystemEventRecord;
@@ -431,6 +458,7 @@ declare module "@polkadot/types/types/registry" {
     MoonriverRuntimeOriginCaller: MoonriverRuntimeOriginCaller;
     MoonriverRuntimeProxyType: MoonriverRuntimeProxyType;
     MoonriverRuntimeRuntime: MoonriverRuntimeRuntime;
+    MoonriverRuntimeRuntimeHoldReason: MoonriverRuntimeRuntimeHoldReason;
     MoonriverRuntimeXcmConfigAssetType: MoonriverRuntimeXcmConfigAssetType;
     MoonriverRuntimeXcmConfigCurrencyId: MoonriverRuntimeXcmConfigCurrencyId;
     MoonriverRuntimeXcmConfigTransactors: MoonriverRuntimeXcmConfigTransactors;
@@ -438,10 +466,10 @@ declare module "@polkadot/types/types/registry" {
     OrmlXtokensModuleCall: OrmlXtokensModuleCall;
     OrmlXtokensModuleError: OrmlXtokensModuleError;
     OrmlXtokensModuleEvent: OrmlXtokensModuleEvent;
-    PalletAssetManagerAssetInfo: PalletAssetManagerAssetInfo;
     PalletAssetManagerCall: PalletAssetManagerCall;
     PalletAssetManagerError: PalletAssetManagerError;
     PalletAssetManagerEvent: PalletAssetManagerEvent;
+    PalletAssetsAccountStatus: PalletAssetsAccountStatus;
     PalletAssetsApproval: PalletAssetsApproval;
     PalletAssetsAssetAccount: PalletAssetsAssetAccount;
     PalletAssetsAssetDetails: PalletAssetsAssetDetails;
@@ -460,10 +488,12 @@ declare module "@polkadot/types/types/registry" {
     PalletAuthorSlotFilterCall: PalletAuthorSlotFilterCall;
     PalletAuthorSlotFilterEvent: PalletAuthorSlotFilterEvent;
     PalletBalancesAccountData: PalletBalancesAccountData;
+    PalletBalancesAdjustmentDirection: PalletBalancesAdjustmentDirection;
     PalletBalancesBalanceLock: PalletBalancesBalanceLock;
     PalletBalancesCall: PalletBalancesCall;
     PalletBalancesError: PalletBalancesError;
     PalletBalancesEvent: PalletBalancesEvent;
+    PalletBalancesIdAmount: PalletBalancesIdAmount;
     PalletBalancesReasons: PalletBalancesReasons;
     PalletBalancesReserveData: PalletBalancesReserveData;
     PalletCollectiveCall: PalletCollectiveCall;
@@ -486,19 +516,6 @@ declare module "@polkadot/types/types/registry" {
     PalletCrowdloanRewardsError: PalletCrowdloanRewardsError;
     PalletCrowdloanRewardsEvent: PalletCrowdloanRewardsEvent;
     PalletCrowdloanRewardsRewardInfo: PalletCrowdloanRewardsRewardInfo;
-    PalletDemocracyCall: PalletDemocracyCall;
-    PalletDemocracyConviction: PalletDemocracyConviction;
-    PalletDemocracyDelegations: PalletDemocracyDelegations;
-    PalletDemocracyError: PalletDemocracyError;
-    PalletDemocracyEvent: PalletDemocracyEvent;
-    PalletDemocracyMetadataOwner: PalletDemocracyMetadataOwner;
-    PalletDemocracyReferendumInfo: PalletDemocracyReferendumInfo;
-    PalletDemocracyReferendumStatus: PalletDemocracyReferendumStatus;
-    PalletDemocracyTally: PalletDemocracyTally;
-    PalletDemocracyVoteAccountVote: PalletDemocracyVoteAccountVote;
-    PalletDemocracyVotePriorLock: PalletDemocracyVotePriorLock;
-    PalletDemocracyVoteThreshold: PalletDemocracyVoteThreshold;
-    PalletDemocracyVoteVoting: PalletDemocracyVoteVoting;
     PalletEthereumCall: PalletEthereumCall;
     PalletEthereumError: PalletEthereumError;
     PalletEthereumEvent: PalletEthereumEvent;
@@ -510,21 +527,27 @@ declare module "@polkadot/types/types/registry" {
     PalletEvmCodeMetadata: PalletEvmCodeMetadata;
     PalletEvmError: PalletEvmError;
     PalletEvmEvent: PalletEvmEvent;
-    PalletIdentityBitFlags: PalletIdentityBitFlags;
+    PalletIdentityAuthorityProperties: PalletIdentityAuthorityProperties;
     PalletIdentityCall: PalletIdentityCall;
     PalletIdentityError: PalletIdentityError;
     PalletIdentityEvent: PalletIdentityEvent;
-    PalletIdentityIdentityField: PalletIdentityIdentityField;
-    PalletIdentityIdentityInfo: PalletIdentityIdentityInfo;
     PalletIdentityJudgement: PalletIdentityJudgement;
+    PalletIdentityLegacyIdentityInfo: PalletIdentityLegacyIdentityInfo;
     PalletIdentityRegistrarInfo: PalletIdentityRegistrarInfo;
     PalletIdentityRegistration: PalletIdentityRegistration;
     PalletMaintenanceModeCall: PalletMaintenanceModeCall;
     PalletMaintenanceModeError: PalletMaintenanceModeError;
     PalletMaintenanceModeEvent: PalletMaintenanceModeEvent;
-    PalletMigrationsCall: PalletMigrationsCall;
+    PalletMessageQueueBookState: PalletMessageQueueBookState;
+    PalletMessageQueueCall: PalletMessageQueueCall;
+    PalletMessageQueueError: PalletMessageQueueError;
+    PalletMessageQueueEvent: PalletMessageQueueEvent;
+    PalletMessageQueueNeighbours: PalletMessageQueueNeighbours;
+    PalletMessageQueuePage: PalletMessageQueuePage;
     PalletMigrationsError: PalletMigrationsError;
     PalletMigrationsEvent: PalletMigrationsEvent;
+    PalletMoonbeamLazyMigrationsCall: PalletMoonbeamLazyMigrationsCall;
+    PalletMoonbeamLazyMigrationsError: PalletMoonbeamLazyMigrationsError;
     PalletMoonbeamOrbitersCall: PalletMoonbeamOrbitersCall;
     PalletMoonbeamOrbitersCollatorPoolInfo: PalletMoonbeamOrbitersCollatorPoolInfo;
     PalletMoonbeamOrbitersCurrentOrbiter: PalletMoonbeamOrbitersCurrentOrbiter;
@@ -557,10 +580,14 @@ declare module "@polkadot/types/types/registry" {
     PalletParachainStakingInflationInflationInfo: PalletParachainStakingInflationInflationInfo;
     PalletParachainStakingParachainBondConfig: PalletParachainStakingParachainBondConfig;
     PalletParachainStakingRoundInfo: PalletParachainStakingRoundInfo;
+    PalletParachainStakingSetBoundedOrderedSet: PalletParachainStakingSetBoundedOrderedSet;
     PalletParachainStakingSetOrderedSet: PalletParachainStakingSetOrderedSet;
+    PalletPrecompileBenchmarksError: PalletPrecompileBenchmarksError;
     PalletPreimageCall: PalletPreimageCall;
     PalletPreimageError: PalletPreimageError;
     PalletPreimageEvent: PalletPreimageEvent;
+    PalletPreimageHoldReason: PalletPreimageHoldReason;
+    PalletPreimageOldRequestStatus: PalletPreimageOldRequestStatus;
     PalletPreimageRequestStatus: PalletPreimageRequestStatus;
     PalletProxyAnnouncement: PalletProxyAnnouncement;
     PalletProxyCall: PalletProxyCall;
@@ -585,6 +612,7 @@ declare module "@polkadot/types/types/registry" {
     PalletReferendaReferendumStatus: PalletReferendaReferendumStatus;
     PalletReferendaTrackInfo: PalletReferendaTrackInfo;
     PalletRootTestingCall: PalletRootTestingCall;
+    PalletRootTestingEvent: PalletRootTestingEvent;
     PalletSchedulerCall: PalletSchedulerCall;
     PalletSchedulerError: PalletSchedulerError;
     PalletSchedulerEvent: PalletSchedulerEvent;
@@ -596,7 +624,9 @@ declare module "@polkadot/types/types/registry" {
     PalletTreasuryCall: PalletTreasuryCall;
     PalletTreasuryError: PalletTreasuryError;
     PalletTreasuryEvent: PalletTreasuryEvent;
+    PalletTreasuryPaymentState: PalletTreasuryPaymentState;
     PalletTreasuryProposal: PalletTreasuryProposal;
+    PalletTreasurySpendStatus: PalletTreasurySpendStatus;
     PalletUtilityCall: PalletUtilityCall;
     PalletUtilityError: PalletUtilityError;
     PalletUtilityEvent: PalletUtilityEvent;
@@ -616,18 +646,20 @@ declare module "@polkadot/types/types/registry" {
     PalletXcmTransactorEvent: PalletXcmTransactorEvent;
     PalletXcmTransactorHrmpInitParams: PalletXcmTransactorHrmpInitParams;
     PalletXcmTransactorHrmpOperation: PalletXcmTransactorHrmpOperation;
+    PalletXcmTransactorRelayIndicesRelayChainIndices: PalletXcmTransactorRelayIndicesRelayChainIndices;
     PalletXcmTransactorRemoteTransactInfoWithMaxWeight: PalletXcmTransactorRemoteTransactInfoWithMaxWeight;
     PalletXcmTransactorTransactWeights: PalletXcmTransactorTransactWeights;
     PalletXcmVersionMigrationStage: PalletXcmVersionMigrationStage;
     PolkadotCorePrimitivesInboundDownwardMessage: PolkadotCorePrimitivesInboundDownwardMessage;
     PolkadotCorePrimitivesInboundHrmpMessage: PolkadotCorePrimitivesInboundHrmpMessage;
     PolkadotCorePrimitivesOutboundHrmpMessage: PolkadotCorePrimitivesOutboundHrmpMessage;
-    PolkadotParachainPrimitivesHrmpChannelId: PolkadotParachainPrimitivesHrmpChannelId;
-    PolkadotParachainPrimitivesXcmpMessageFormat: PolkadotParachainPrimitivesXcmpMessageFormat;
-    PolkadotPrimitivesV2AbridgedHostConfiguration: PolkadotPrimitivesV2AbridgedHostConfiguration;
-    PolkadotPrimitivesV2AbridgedHrmpChannel: PolkadotPrimitivesV2AbridgedHrmpChannel;
-    PolkadotPrimitivesV2PersistedValidationData: PolkadotPrimitivesV2PersistedValidationData;
-    PolkadotPrimitivesV2UpgradeRestriction: PolkadotPrimitivesV2UpgradeRestriction;
+    PolkadotParachainPrimitivesPrimitivesHrmpChannelId: PolkadotParachainPrimitivesPrimitivesHrmpChannelId;
+    PolkadotPrimitivesV6AbridgedHostConfiguration: PolkadotPrimitivesV6AbridgedHostConfiguration;
+    PolkadotPrimitivesV6AbridgedHrmpChannel: PolkadotPrimitivesV6AbridgedHrmpChannel;
+    PolkadotPrimitivesV6AsyncBackingAsyncBackingParams: PolkadotPrimitivesV6AsyncBackingAsyncBackingParams;
+    PolkadotPrimitivesV6PersistedValidationData: PolkadotPrimitivesV6PersistedValidationData;
+    PolkadotPrimitivesV6UpgradeGoAhead: PolkadotPrimitivesV6UpgradeGoAhead;
+    PolkadotPrimitivesV6UpgradeRestriction: PolkadotPrimitivesV6UpgradeRestriction;
     SessionKeysPrimitivesVrfVrfCryptoPublic: SessionKeysPrimitivesVrfVrfCryptoPublic;
     SpArithmeticArithmeticError: SpArithmeticArithmeticError;
     SpCoreEcdsaSignature: SpCoreEcdsaSignature;
@@ -635,6 +667,7 @@ declare module "@polkadot/types/types/registry" {
     SpCoreSr25519Public: SpCoreSr25519Public;
     SpCoreSr25519Signature: SpCoreSr25519Signature;
     SpCoreVoid: SpCoreVoid;
+    SpRuntimeBlakeTwo256: SpRuntimeBlakeTwo256;
     SpRuntimeDigest: SpRuntimeDigest;
     SpRuntimeDigestDigestItem: SpRuntimeDigestDigestItem;
     SpRuntimeDispatchError: SpRuntimeDispatchError;
@@ -647,6 +680,25 @@ declare module "@polkadot/types/types/registry" {
     SpVersionRuntimeVersion: SpVersionRuntimeVersion;
     SpWeightsRuntimeDbWeight: SpWeightsRuntimeDbWeight;
     SpWeightsWeightV2Weight: SpWeightsWeightV2Weight;
+    StagingXcmV3MultiLocation: StagingXcmV3MultiLocation;
+    StagingXcmV4Asset: StagingXcmV4Asset;
+    StagingXcmV4AssetAssetFilter: StagingXcmV4AssetAssetFilter;
+    StagingXcmV4AssetAssetId: StagingXcmV4AssetAssetId;
+    StagingXcmV4AssetAssetInstance: StagingXcmV4AssetAssetInstance;
+    StagingXcmV4AssetAssets: StagingXcmV4AssetAssets;
+    StagingXcmV4AssetFungibility: StagingXcmV4AssetFungibility;
+    StagingXcmV4AssetWildAsset: StagingXcmV4AssetWildAsset;
+    StagingXcmV4AssetWildFungibility: StagingXcmV4AssetWildFungibility;
+    StagingXcmV4Instruction: StagingXcmV4Instruction;
+    StagingXcmV4Junction: StagingXcmV4Junction;
+    StagingXcmV4JunctionNetworkId: StagingXcmV4JunctionNetworkId;
+    StagingXcmV4Junctions: StagingXcmV4Junctions;
+    StagingXcmV4Location: StagingXcmV4Location;
+    StagingXcmV4PalletInfo: StagingXcmV4PalletInfo;
+    StagingXcmV4QueryResponseInfo: StagingXcmV4QueryResponseInfo;
+    StagingXcmV4Response: StagingXcmV4Response;
+    StagingXcmV4TraitsOutcome: StagingXcmV4TraitsOutcome;
+    StagingXcmV4Xcm: StagingXcmV4Xcm;
     XcmDoubleEncoded: XcmDoubleEncoded;
     XcmPrimitivesEthereumXcmEthereumXcmFee: XcmPrimitivesEthereumXcmEthereumXcmFee;
     XcmPrimitivesEthereumXcmEthereumXcmTransaction: XcmPrimitivesEthereumXcmEthereumXcmTransaction;
@@ -681,7 +733,6 @@ declare module "@polkadot/types/types/registry" {
     XcmV3Junctions: XcmV3Junctions;
     XcmV3MaybeErrorCode: XcmV3MaybeErrorCode;
     XcmV3MultiAsset: XcmV3MultiAsset;
-    XcmV3MultiLocation: XcmV3MultiLocation;
     XcmV3MultiassetAssetId: XcmV3MultiassetAssetId;
     XcmV3MultiassetAssetInstance: XcmV3MultiassetAssetInstance;
     XcmV3MultiassetFungibility: XcmV3MultiassetFungibility;
@@ -693,13 +744,12 @@ declare module "@polkadot/types/types/registry" {
     XcmV3QueryResponseInfo: XcmV3QueryResponseInfo;
     XcmV3Response: XcmV3Response;
     XcmV3TraitsError: XcmV3TraitsError;
-    XcmV3TraitsOutcome: XcmV3TraitsOutcome;
     XcmV3WeightLimit: XcmV3WeightLimit;
     XcmV3Xcm: XcmV3Xcm;
+    XcmVersionedAsset: XcmVersionedAsset;
     XcmVersionedAssetId: XcmVersionedAssetId;
-    XcmVersionedMultiAsset: XcmVersionedMultiAsset;
-    XcmVersionedMultiAssets: XcmVersionedMultiAssets;
-    XcmVersionedMultiLocation: XcmVersionedMultiLocation;
+    XcmVersionedAssets: XcmVersionedAssets;
+    XcmVersionedLocation: XcmVersionedLocation;
     XcmVersionedResponse: XcmVersionedResponse;
     XcmVersionedXcm: XcmVersionedXcm;
   } // InterfaceTypes

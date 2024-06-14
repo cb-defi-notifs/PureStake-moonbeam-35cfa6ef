@@ -18,6 +18,11 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;
+
 mod erc20_matcher;
 mod erc20_trap;
 mod errors;
@@ -42,10 +47,11 @@ pub mod pallet {
 	use sp_core::{H160, H256, U256};
 	use sp_std::vec::Vec;
 	use xcm::latest::{
-		Error as XcmError, MultiAsset, MultiLocation, Result as XcmResult, XcmContext,
+		Asset, AssetId, Error as XcmError, Junction, Location, Result as XcmResult, XcmContext,
 	};
-	use xcm_executor::traits::{Convert, Error as MatchError, MatchesFungibles};
-	use xcm_executor::Assets;
+	use xcm_executor::traits::ConvertLocation;
+	use xcm_executor::traits::{Error as MatchError, MatchesFungibles};
+	use xcm_executor::AssetsInHolding;
 
 	const ERC20_TRANSFER_CALL_DATA_SIZE: usize = 4 + 32 + 32; // selector + from + amount
 	const ERC20_TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
@@ -55,24 +61,47 @@ pub mod pallet {
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config + pallet_evm::Config {
-		type AccountIdConverter: Convert<MultiLocation, H160>;
-		type Erc20MultilocationPrefix: Get<MultiLocation>;
+		type AccountIdConverter: ConvertLocation<H160>;
+		type Erc20MultilocationPrefix: Get<Location>;
 		type Erc20TransferGasLimit: Get<u64>;
 		type EvmRunner: Runner<Self>;
 	}
 
 	impl<T: Config> Pallet<T> {
-		pub fn is_erc20_asset(asset: &MultiAsset) -> bool {
+		pub fn is_erc20_asset(asset: &Asset) -> bool {
 			Erc20Matcher::<T::Erc20MultilocationPrefix>::is_erc20_asset(asset)
 		}
-		pub fn weight_of_erc20_transfer() -> Weight {
-			T::GasWeightMapping::gas_to_weight(T::Erc20TransferGasLimit::get(), true)
+		pub fn gas_limit_of_erc20_transfer(asset_id: &AssetId) -> u64 {
+			let location = &asset_id.0;
+			if let Some(Junction::GeneralKey {
+				length: _,
+				ref data,
+			}) = location.interior().into_iter().next_back()
+			{
+				// As GeneralKey definition might change in future versions of XCM, this is meant
+				// to throw a compile error as a warning that data type has changed.
+				// If that happens, a new check is needed to ensure that data has at least 18
+				// bytes (size of b"gas_limit:" + u64)
+				let data: &[u8; 32] = &data;
+				if let Ok(content) = core::str::from_utf8(&data[0..10]) {
+					if content == "gas_limit:" {
+						let mut bytes: [u8; 8] = Default::default();
+						bytes.copy_from_slice(&data[10..18]);
+						return u64::from_le_bytes(bytes);
+					}
+				}
+			}
+			T::Erc20TransferGasLimit::get()
+		}
+		pub fn weight_of_erc20_transfer(asset_id: &AssetId) -> Weight {
+			T::GasWeightMapping::gas_to_weight(Self::gas_limit_of_erc20_transfer(asset_id), true)
 		}
 		fn erc20_transfer(
 			erc20_contract_address: H160,
 			from: H160,
 			to: H160,
 			amount: U256,
+			gas_limit: u64,
 		) -> Result<(), Erc20TransferError> {
 			let mut input = Vec::with_capacity(ERC20_TRANSFER_CALL_DATA_SIZE);
 			// ERC20.transfer method hash
@@ -82,15 +111,14 @@ pub mod pallet {
 			// append amount to be transferred
 			input.extend_from_slice(H256::from_uint(&amount).as_bytes());
 
-			let weight_limit =
-				T::GasWeightMapping::gas_to_weight(T::Erc20TransferGasLimit::get(), true);
+			let weight_limit: Weight = T::GasWeightMapping::gas_to_weight(gas_limit, true);
 
 			let exec_info = T::EvmRunner::call(
 				from,
 				erc20_contract_address,
 				input,
 				U256::default(),
-				T::Erc20TransferGasLimit::get(),
+				gas_limit,
 				None,
 				None,
 				None,
@@ -129,16 +157,14 @@ pub mod pallet {
 		// For optimization reasons, the asset we want to deposit has not really been withdrawn,
 		// we have just traced from which account it should have been withdrawn.
 		// So we will retrieve these information and make the transfer from the origin account.
-		fn deposit_asset(
-			what: &MultiAsset,
-			who: &MultiLocation,
-			_context: &XcmContext,
-		) -> XcmResult {
+		fn deposit_asset(what: &Asset, who: &Location, _context: Option<&XcmContext>) -> XcmResult {
 			let (contract_address, amount) =
 				Erc20Matcher::<T::Erc20MultilocationPrefix>::matches_fungibles(what)?;
 
-			let beneficiary = T::AccountIdConverter::convert_ref(who)
-				.map_err(|()| MatchError::AccountIdConversionFailed)?;
+			let beneficiary = T::AccountIdConverter::convert_location(who)
+				.ok_or(MatchError::AccountIdConversionFailed)?;
+
+			let gas_limit = Self::gas_limit_of_erc20_transfer(&what.id);
 
 			// Get the global context to recover accounts origins.
 			XcmHoldingErc20sOrigins::with(|erc20s_origins| {
@@ -149,7 +175,13 @@ pub mod pallet {
 						tokens_to_transfer
 							.into_iter()
 							.try_for_each(|(from, subamount)| {
-								Self::erc20_transfer(contract_address, from, beneficiary, subamount)
+								Self::erc20_transfer(
+									contract_address,
+									from,
+									beneficiary,
+									subamount,
+									gas_limit,
+								)
 							})
 					})
 					.map_err(Into::into),
@@ -168,24 +200,26 @@ pub mod pallet {
 		}
 
 		fn internal_transfer_asset(
-			asset: &MultiAsset,
-			from: &MultiLocation,
-			to: &MultiLocation,
+			asset: &Asset,
+			from: &Location,
+			to: &Location,
 			_context: &XcmContext,
-		) -> Result<Assets, XcmError> {
+		) -> Result<AssetsInHolding, XcmError> {
 			let (contract_address, amount) =
 				Erc20Matcher::<T::Erc20MultilocationPrefix>::matches_fungibles(asset)?;
 
-			let from = T::AccountIdConverter::convert_ref(from)
-				.map_err(|()| MatchError::AccountIdConversionFailed)?;
+			let from = T::AccountIdConverter::convert_location(from)
+				.ok_or(MatchError::AccountIdConversionFailed)?;
 
-			let to = T::AccountIdConverter::convert_ref(to)
-				.map_err(|()| MatchError::AccountIdConversionFailed)?;
+			let to = T::AccountIdConverter::convert_location(to)
+				.ok_or(MatchError::AccountIdConversionFailed)?;
+
+			let gas_limit = Self::gas_limit_of_erc20_transfer(&asset.id);
 
 			// We perform the evm transfers in a storage transaction to ensure that if it fail
 			// any contract storage changes are rolled back.
 			frame_support::storage::with_storage_layer(|| {
-				Self::erc20_transfer(contract_address, from, to, amount)
+				Self::erc20_transfer(contract_address, from, to, amount, gas_limit)
 			})?;
 
 			Ok(asset.clone().into())
@@ -199,14 +233,14 @@ pub mod pallet {
 		// In order to perform only one evm call, we just trace the origin of the asset,
 		// and then the transfer will only really be performed in the deposit instruction.
 		fn withdraw_asset(
-			what: &MultiAsset,
-			who: &MultiLocation,
+			what: &Asset,
+			who: &Location,
 			_context: Option<&XcmContext>,
-		) -> Result<Assets, XcmError> {
+		) -> Result<AssetsInHolding, XcmError> {
 			let (contract_address, amount) =
 				Erc20Matcher::<T::Erc20MultilocationPrefix>::matches_fungibles(what)?;
-			let who = T::AccountIdConverter::convert_ref(who)
-				.map_err(|()| MatchError::AccountIdConversionFailed)?;
+			let who = T::AccountIdConverter::convert_location(who)
+				.ok_or(MatchError::AccountIdConversionFailed)?;
 
 			XcmHoldingErc20sOrigins::with(|erc20s_origins| {
 				erc20s_origins.insert(contract_address, who, amount)

@@ -17,6 +17,32 @@
 #[macro_export]
 macro_rules! impl_runtime_apis_plus_common {
 	{$($custom:tt)*} => {
+
+		#[cfg(feature = "evm-tracing")]
+		// Helper function to replay the "on_idle" hook for all pallets, we need this for
+		// evm-tracing because some ethereum-xcm transactions might be executed at on_idle.
+		//
+		// We need to make sure that we replay on_idle exactly the same way as the
+		// original block execution, but unfortunatly frame executive diosn't provide a function
+		// to replay only on_idle, so we need to copy here some code inside frame executive.
+		fn replay_on_idle() {
+			use frame_system::pallet_prelude::BlockNumberFor;
+			use frame_support::traits::OnIdle;
+
+			let weight = <frame_system::Pallet<Runtime>>::block_weight();
+			let max_weight = <
+					<Runtime as frame_system::Config>::BlockWeights as
+					frame_support::traits::Get<_>
+				>::get().max_block;
+			let remaining_weight = max_weight.saturating_sub(weight.total());
+			if remaining_weight.all_gt(Weight::zero()) {
+				let _ = <AllPalletsWithSystem as OnIdle<BlockNumberFor<Runtime>>>::on_idle(
+					<frame_system::Pallet<Runtime>>::block_number(),
+					remaining_weight,
+				);
+			}
+		}
+
 		impl_runtime_apis! {
 			$($custom)*
 
@@ -37,6 +63,14 @@ macro_rules! impl_runtime_apis_plus_common {
 			impl sp_api::Metadata<Block> for Runtime {
 				fn metadata() -> OpaqueMetadata {
 					OpaqueMetadata::new(Runtime::metadata().into())
+				}
+
+				fn metadata_at_version(version: u32) -> Option<OpaqueMetadata> {
+					Runtime::metadata_at_version(version)
+				}
+
+				fn metadata_versions() -> Vec<u32> {
+					Runtime::metadata_versions()
 				}
 			}
 
@@ -81,6 +115,16 @@ macro_rules! impl_runtime_apis_plus_common {
 				}
 			}
 
+			impl sp_genesis_builder::GenesisBuilder<Block> for Runtime {
+				fn create_default_config() -> Vec<u8> {
+					frame_support::genesis_builder_helper::create_default_config::<RuntimeGenesisConfig>()
+				}
+
+				fn build_config(config: Vec<u8>) -> sp_genesis_builder::Result {
+					frame_support::genesis_builder_helper::build_config::<RuntimeGenesisConfig>(config)
+				}
+			}
+
 			impl frame_system_rpc_runtime_api::AccountNonceApi<Block, AccountId, Index> for Runtime {
 				fn account_nonce(account: AccountId) -> Index {
 					System::account_nonce(account)
@@ -91,6 +135,7 @@ macro_rules! impl_runtime_apis_plus_common {
 				fn trace_transaction(
 					extrinsics: Vec<<Block as BlockT>::Extrinsic>,
 					traced_transaction: &EthereumTransaction,
+					header: &<Block as BlockT>::Header,
 				) -> Result<
 					(),
 					sp_runtime::DispatchError,
@@ -103,12 +148,20 @@ macro_rules! impl_runtime_apis_plus_common {
 							EthereumXcmTracingStatus
 						};
 						use frame_support::storage::unhashed;
+						use frame_system::pallet_prelude::BlockNumberFor;
 
 						// Tell the CallDispatcher we are tracing a specific Transaction.
 						unhashed::put::<EthereumXcmTracingStatus>(
 							ETHEREUM_XCM_TRACING_STORAGE_KEY,
 							&EthereumXcmTracingStatus::Transaction(traced_transaction.hash()),
 						);
+
+						// Initialize block: calls the "on_initialize" hook on every pallet
+						// in AllPalletsWithSystem.
+						// After pallet message queue was introduced, this must be done only after
+						// enabling XCM tracing by setting ETHEREUM_XCM_TRACING_STORAGE_KEY
+						// in the storage
+						Executive::initialize_block(header);
 
 						// Apply the a subset of extrinsics: all the substrate-specific or ethereum
 						// transactions that preceded the requested transaction.
@@ -130,9 +183,26 @@ macro_rules! impl_runtime_apis_plus_common {
 								return Ok(());
 							}
 						}
-						Err(sp_runtime::DispatchError::Other(
-							"Failed to find Ethereum transaction among the extrinsics.",
-						))
+
+						if let Some(EthereumXcmTracingStatus::Transaction(_)) = unhashed::get(
+							ETHEREUM_XCM_TRACING_STORAGE_KEY
+						) {
+							// If the transaction was not found, it might be
+							// an eth-xcm transaction that was executed at on_idle
+							replay_on_idle();
+						}
+
+						if let Some(EthereumXcmTracingStatus::TransactionExited) = unhashed::get(
+							ETHEREUM_XCM_TRACING_STORAGE_KEY
+						) {
+							// The transaction was found
+							Ok(())
+						} else {
+							// The transaction was not-found
+							Err(sp_runtime::DispatchError::Other(
+								"Failed to find Ethereum transaction among the extrinsics.",
+							))
+						}
 					}
 					#[cfg(not(feature = "evm-tracing"))]
 					Err(sp_runtime::DispatchError::Other(
@@ -143,6 +213,7 @@ macro_rules! impl_runtime_apis_plus_common {
 				fn trace_block(
 					extrinsics: Vec<<Block as BlockT>::Extrinsic>,
 					known_transactions: Vec<H256>,
+					header: &<Block as BlockT>::Header,
 				) -> Result<
 					(),
 					sp_runtime::DispatchError,
@@ -150,6 +221,7 @@ macro_rules! impl_runtime_apis_plus_common {
 					#[cfg(feature = "evm-tracing")]
 					{
 						use moonbeam_evm_tracer::tracer::EvmTracer;
+						use frame_system::pallet_prelude::BlockNumberFor;
 						use xcm_primitives::EthereumXcmTracingStatus;
 
 						// Tell the CallDispatcher we are tracing a full Block.
@@ -160,6 +232,13 @@ macro_rules! impl_runtime_apis_plus_common {
 
 						let mut config = <Runtime as pallet_evm::Config>::config().clone();
 						config.estimate = true;
+
+						// Initialize block: calls the "on_initialize" hook on every pallet
+						// in AllPalletsWithSystem.
+						// After pallet message queue was introduced, this must be done only after
+						// enabling XCM tracing by setting ETHEREUM_XCM_TRACING_STORAGE_KEY
+						// in the storage
+						Executive::initialize_block(header);
 
 						// Apply all extrinsics. Ethereum extrinsics are traced.
 						for ext in extrinsics.into_iter() {
@@ -179,6 +258,95 @@ macro_rules! impl_runtime_apis_plus_common {
 							};
 						}
 
+						// Replay on_idle
+						// Some XCM messages with eth-xcm transaction might be executed at on_idle
+						replay_on_idle();
+
+						Ok(())
+					}
+					#[cfg(not(feature = "evm-tracing"))]
+					Err(sp_runtime::DispatchError::Other(
+						"Missing `evm-tracing` compile time feature flag.",
+					))
+				}
+
+				fn trace_call(
+					header: &<Block as BlockT>::Header,
+					from: H160,
+					to: H160,
+					data: Vec<u8>,
+					value: U256,
+					gas_limit: U256,
+					max_fee_per_gas: Option<U256>,
+					max_priority_fee_per_gas: Option<U256>,
+					nonce: Option<U256>,
+					access_list: Option<Vec<(H160, Vec<H256>)>>,
+				) -> Result<(), sp_runtime::DispatchError> {
+					#[cfg(feature = "evm-tracing")]
+					{
+						use moonbeam_evm_tracer::tracer::EvmTracer;
+
+						// Initialize block: calls the "on_initialize" hook on every pallet
+						// in AllPalletsWithSystem.
+						Executive::initialize_block(header);
+
+						EvmTracer::new().trace(|| {
+							let is_transactional = false;
+							let validate = true;
+							let without_base_extrinsic_weight = true;
+
+
+							// Estimated encoded transaction size must be based on the heaviest transaction
+							// type (EIP1559Transaction) to be compatible with all transaction types.
+							let mut estimated_transaction_len = data.len() +
+							// pallet ethereum index: 1
+							// transact call index: 1
+							// Transaction enum variant: 1
+							// chain_id 8 bytes
+							// nonce: 32
+							// max_priority_fee_per_gas: 32
+							// max_fee_per_gas: 32
+							// gas_limit: 32
+							// action: 21 (enum varianrt + call address)
+							// value: 32
+							// access_list: 1 (empty vec size)
+							// 65 bytes signature
+							258;
+
+							if access_list.is_some() {
+								estimated_transaction_len += access_list.encoded_size();
+							}
+
+							let gas_limit = gas_limit.min(u64::MAX.into()).low_u64();
+
+							let (weight_limit, proof_size_base_cost) =
+								match <Runtime as pallet_evm::Config>::GasWeightMapping::gas_to_weight(
+									gas_limit,
+									without_base_extrinsic_weight
+								) {
+									weight_limit if weight_limit.proof_size() > 0 => {
+										(Some(weight_limit), Some(estimated_transaction_len as u64))
+									}
+									_ => (None, None),
+								};
+
+							let _ = <Runtime as pallet_evm::Config>::Runner::call(
+								from,
+								to,
+								data,
+								value,
+								gas_limit,
+								max_fee_per_gas,
+								max_priority_fee_per_gas,
+								nonce,
+								access_list.unwrap_or_default(),
+								is_transactional,
+								validate,
+								weight_limit,
+								proof_size_base_cost,
+								<Runtime as pallet_evm::Config>::config(),
+							);
+						});
 						Ok(())
 					}
 					#[cfg(not(feature = "evm-tracing"))]
@@ -263,22 +431,23 @@ macro_rules! impl_runtime_apis_plus_common {
 					let is_transactional = false;
 					let validate = true;
 
+					// Estimated encoded transaction size must be based on the heaviest transaction
+					// type (EIP1559Transaction) to be compatible with all transaction types.
 					let mut estimated_transaction_len = data.len() +
-						// to: 20
-						// from: 20
-						// value: 32
-						// gas_limit: 32
+						// pallet ethereum index: 1
+						// transact call index: 1
+						// Transaction enum variant: 1
+						// chain_id 8 bytes
 						// nonce: 32
-						// 1 byte transaction action variant
-						// chain id 8 bytes
+						// max_priority_fee_per_gas: 32
+						// max_fee_per_gas: 32
+						// gas_limit: 32
+						// action: 21 (enum varianrt + call address)
+						// value: 32
+						// access_list: 1 (empty vec size)
 						// 65 bytes signature
-						210;
-					if max_fee_per_gas.is_some() {
-						estimated_transaction_len += 32;
-					}
-					if max_priority_fee_per_gas.is_some() {
-						estimated_transaction_len += 32;
-					}
+						258;
+
 					if access_list.is_some() {
 						estimated_transaction_len += access_list.encoded_size();
 					}
@@ -337,7 +506,6 @@ macro_rules! impl_runtime_apis_plus_common {
 					let validate = true;
 
 					let mut estimated_transaction_len = data.len() +
-						// to: 20
 						// from: 20
 						// value: 32
 						// gas_limit: 32
@@ -345,7 +513,8 @@ macro_rules! impl_runtime_apis_plus_common {
 						// 1 byte transaction action variant
 						// chain id 8 bytes
 						// 65 bytes signature
-						210;
+						190;
+
 					if max_fee_per_gas.is_some() {
 						estimated_transaction_len += 32;
 					}
@@ -430,6 +599,27 @@ macro_rules! impl_runtime_apis_plus_common {
 				}
 
 				fn gas_limit_multiplier_support() {}
+
+				fn pending_block(
+					xts: Vec<<Block as sp_runtime::traits::Block>::Extrinsic>
+				) -> (
+					Option<pallet_ethereum::Block>, Option<sp_std::prelude::Vec<TransactionStatus>>
+				) {
+					for ext in xts.into_iter() {
+						let _ = Executive::apply_extrinsic(ext);
+					}
+
+					Ethereum::on_finalize(System::block_number() + 1);
+
+					(
+						pallet_ethereum::CurrentBlock::<Runtime>::get(),
+						pallet_ethereum::CurrentTransactionStatuses::<Runtime>::get()
+					)
+				 }
+
+				 fn initialize_pending_block(header: &<Block as BlockT>::Header) {
+					pallet_randomness::vrf::using_fake_vrf(|| Executive::initialize_block(header))
+				}
 			}
 
 			impl fp_rpc::ConvertTransactionRuntimeApi<Block> for Runtime {
@@ -473,6 +663,8 @@ macro_rules! impl_runtime_apis_plus_common {
 					slot: u32,
 					parent_header: &<Block as BlockT>::Header
 				) -> bool {
+					use pallet_parachain_staking::Config as PalletParachainStakingConfig;
+
 					let block_number = parent_header.number + 1;
 
 					// The Moonbeam runtimes use an entropy source that needs to do some accounting
@@ -488,7 +680,8 @@ macro_rules! impl_runtime_apis_plus_common {
 					// Because the staking solution calculates the next staking set at the beginning
 					// of the first block in the new round, the only way to accurately predict the
 					// authors is to compute the selection during prediction.
-					if pallet_parachain_staking::Pallet::<Self>::round().should_update(block_number) {
+					if pallet_parachain_staking::Pallet::<Self>::round()
+						.should_update(block_number) {
 						// get author account id
 						use nimbus_primitives::AccountLookup;
 						let author_account_id = if let Some(account) =
@@ -552,38 +745,12 @@ macro_rules! impl_runtime_apis_plus_common {
 					use frame_benchmarking::{list_benchmark, Benchmarking, BenchmarkList};
 					use moonbeam_xcm_benchmarks::generic::benchmarking as MoonbeamXcmBenchmarks;
 					use frame_support::traits::StorageInfoTrait;
-					use frame_system_benchmarking::Pallet as SystemBench;
-					use pallet_crowdloan_rewards::Pallet as PalletCrowdloanRewardsBench;
-					use pallet_parachain_staking::Pallet as ParachainStakingBench;
-					use pallet_author_mapping::Pallet as PalletAuthorMappingBench;
-					use pallet_author_slot_filter::Pallet as PalletAuthorSlotFilter;
-					use pallet_moonbeam_orbiters::Pallet as PalletMoonbeamOrbiters;
-					use pallet_author_inherent::Pallet as PalletAuthorInherent;
-					use pallet_asset_manager::Pallet as PalletAssetManagerBench;
-					use pallet_xcm_transactor::Pallet as XcmTransactorBench;
-					use pallet_randomness::Pallet as RandomnessBench;
-					use pallet_migrations::Pallet as MigrationsBench;
 					use MoonbeamXcmBenchmarks::XcmGenericBenchmarks as MoonbeamXcmGenericBench;
 
-					let mut list = Vec::<BenchmarkList>::new();
+					use pallet_xcm::benchmarking::Pallet as PalletXcmExtrinsicsBenchmark;
 
-					list_benchmark!(list, extra, frame_system, SystemBench::<Runtime>);
-					list_benchmark!(list, extra, parachain_staking, ParachainStakingBench::<Runtime>);
-					list_benchmark!(list, extra, pallet_crowdloan_rewards, PalletCrowdloanRewardsBench::<Runtime>);
-					list_benchmark!(list, extra, pallet_author_mapping, PalletAuthorMappingBench::<Runtime>);
-					list_benchmark!(list, extra, pallet_author_slot_filter, PalletAuthorSlotFilter::<Runtime>);
-					list_benchmark!(list, extra, pallet_moonbeam_orbiters, PalletMoonbeamOrbiters::<Runtime>);
-					list_benchmark!(list, extra, pallet_author_inherent, PalletAuthorInherent::<Runtime>);
-					list_benchmark!(list, extra, pallet_asset_manager, PalletAssetManagerBench::<Runtime>);
-					list_benchmark!(list, extra, xcm_transactor, XcmTransactorBench::<Runtime>);
-					list_benchmark!(list, extra, pallet_randomness, RandomnessBench::<Runtime>);
-					list_benchmark!(
-						list,
-						extra,
-						moonbeam_xcm_benchmarks_generic,
-						MoonbeamXcmGenericBench::<Runtime>
-					);
-					list_benchmark!(list, extra, pallet_migrations, MigrationsBench::<Runtime>);
+					let mut list = Vec::<BenchmarkList>::new();
+					list_benchmarks!(list, extra);
 
 					let storage_info = AllPalletsWithSystem::storage_info();
 
@@ -593,11 +760,14 @@ macro_rules! impl_runtime_apis_plus_common {
 				fn dispatch_benchmark(
 					config: frame_benchmarking::BenchmarkConfig,
 				) -> Result<Vec<frame_benchmarking::BenchmarkBatch>, sp_runtime::RuntimeString> {
-					use frame_benchmarking::{
-						add_benchmark, BenchmarkBatch, Benchmarking, TrackedStorageKey,
-					};
+					use frame_benchmarking::{add_benchmark, BenchmarkBatch, Benchmarking};
+					use frame_support::traits::TrackedStorageKey;
+					use cumulus_primitives_core::ParaId;
 
-					use xcm::latest::prelude::*;
+					use xcm::latest::prelude::{
+						GeneralIndex, Junction, Junctions, Location, Response, NetworkId, AssetId,
+						Assets as XcmAssets, Fungible, Asset, ParentThen, Parachain, Parent
+					};
 					use frame_benchmarking::BenchmarkError;
 
 					use frame_system_benchmarking::Pallet as SystemBench;
@@ -607,28 +777,102 @@ macro_rules! impl_runtime_apis_plus_common {
 					impl moonbeam_xcm_benchmarks::generic::Config for Runtime {}
 
 					use pallet_asset_manager::Config as PalletAssetManagerConfig;
+
+					use pallet_xcm::benchmarking::Pallet as PalletXcmExtrinsicsBenchmark;
+					parameter_types! {
+						pub const RandomParaId: ParaId = ParaId::new(43211234);
+					}
+
+					impl pallet_xcm::benchmarking::Config for Runtime {
+						fn reachable_dest() -> Option<Location> {
+							Some(Parent.into())
+						}
+
+						fn teleportable_asset_and_dest() -> Option<(Asset, Location)> {
+							None
+						}
+
+						fn reserve_transferable_asset_and_dest() -> Option<(Asset, Location)> {
+							use xcm_config::SelfReserve;
+
+							ParachainSystem::open_outbound_hrmp_channel_for_benchmarks_or_tests(
+								RandomParaId::get().into()
+							);
+
+							Some((
+								Asset {
+									fun: Fungible(<Runtime as pallet_balances::Config>::ExistentialDeposit::get()),
+									id: AssetId(SelfReserve::get().into())
+								},
+								// AH can reserve transfer native token to some random parachain.
+								ParentThen(Parachain(RandomParaId::get().into()).into()).into(),
+							))
+						}
+
+						fn set_up_complex_asset_transfer(
+						) -> Option<(XcmAssets, u32, Location, Box<dyn FnOnce()>)> {
+							use xcm_config::SelfReserve;
+
+							let destination: xcm::v4::Location = Parent.into();
+
+							let fee_amount: u128 = <Runtime as pallet_balances::Config>::ExistentialDeposit::get();
+							let fee_asset: Asset = (SelfReserve::get(), fee_amount).into();
+
+							// Give some multiple of transferred amount
+							let balance = fee_amount * 1000;
+							let who = frame_benchmarking::whitelisted_caller();
+							let _ =
+								<Balances as frame_support::traits::Currency<_>>::make_free_balance_be(&who, balance);
+
+							// verify initial balance
+							assert_eq!(Balances::free_balance(&who), balance);
+
+							// set up local asset
+							let asset_amount: u128 = 10u128;
+							let initial_asset_amount: u128 = asset_amount * 10;
+
+							let (asset_id, _, _) = pallet_assets::benchmarking::create_default_minted_asset::<
+								Runtime,
+								()
+							>(true, initial_asset_amount);
+							let transfer_asset: Asset = (SelfReserve::get(), asset_amount).into();
+
+							let assets: XcmAssets = vec![fee_asset.clone(), transfer_asset].into();
+							let fee_index: u32 = 0;
+
+							let verify: Box<dyn FnOnce()> = Box::new(move || {
+								// verify balance after transfer, decreased by
+								// transferred amount (and delivery fees)
+								assert!(Balances::free_balance(&who) <= balance - fee_amount);
+							});
+
+							Some((assets, fee_index, destination, verify))
+						}
+					}
+
 					impl pallet_xcm_benchmarks::Config for Runtime {
 						type XcmConfig = xcm_config::XcmExecutorConfig;
 						type AccountIdConverter = xcm_config::LocationToAccountId;
-						fn valid_destination() -> Result<MultiLocation, BenchmarkError> {
-							Ok(MultiLocation::parent())
+						type DeliveryHelper = ();
+						fn valid_destination() -> Result<Location, BenchmarkError> {
+							Ok(Location::parent())
 						}
-						fn worst_case_holding(_depositable_count: u32) -> MultiAssets {
+						fn worst_case_holding(_depositable_count: u32) -> XcmAssets {
 						// 100 fungibles
 							const HOLDING_FUNGIBLES: u32 = 100;
 							let fungibles_amount: u128 = 100;
 							let assets = (0..HOLDING_FUNGIBLES).map(|i| {
-								let location: MultiLocation = GeneralIndex(i as u128).into();
-								MultiAsset {
-									id: Concrete(location),
+								let location: Location = GeneralIndex(i as u128).into();
+								Asset {
+									id: AssetId(location),
 									fun: Fungible(fungibles_amount * i as u128),
 								}
 								.into()
 							})
 							.chain(
 								core::iter::once(
-									MultiAsset {
-										id: Concrete(MultiLocation::parent()),
+									Asset {
+										id: AssetId(Location::parent()),
 										fun: Fungible(u128::MAX)
 									}
 								)
@@ -637,22 +881,22 @@ macro_rules! impl_runtime_apis_plus_common {
 
 
 							for (i, asset) in assets.iter().enumerate() {
-								if let MultiAsset {
-									id: Concrete(location),
+								if let Asset {
+									id: AssetId(location),
 									fun: Fungible(_)
 								} = asset {
 									<AssetManager as xcm_primitives::AssetTypeGetter<
 										<Runtime as PalletAssetManagerConfig>::AssetId,
 										<Runtime as PalletAssetManagerConfig>::ForeignAssetType>
 									>::set_asset_type_asset_id(
-										location.clone().into(),
+										location.clone().try_into().expect("convert to v3"),
 										i as u128
 									);
 									// set 1-1
 									<AssetManager as xcm_primitives::UnitsToWeightRatio<
 										<Runtime as PalletAssetManagerConfig>::ForeignAssetType>
 									>::set_units_per_second(
-										location.clone().into(),
+										location.clone().try_into().expect("convert to v3"),
 										1_000_000_000_000u128
 									);
 								}
@@ -663,59 +907,59 @@ macro_rules! impl_runtime_apis_plus_common {
 
 					impl pallet_xcm_benchmarks::generic::Config for Runtime {
 						type RuntimeCall = RuntimeCall;
+						type TransactAsset = Balances;
 
 						fn worst_case_response() -> (u64, Response) {
 							(0u64, Response::Version(Default::default()))
 						}
 
 						fn worst_case_asset_exchange()
-							-> Result<(MultiAssets, MultiAssets), BenchmarkError> {
+							-> Result<(XcmAssets, XcmAssets), BenchmarkError> {
 							Err(BenchmarkError::Skip)
 						}
 
-						fn universal_alias() -> Result<Junction, BenchmarkError> {
+						fn universal_alias() -> Result<(Location, Junction), BenchmarkError> {
+							Err(BenchmarkError::Skip)
+						}
+
+						fn export_message_origin_and_destination()
+							-> Result<(Location, NetworkId, Junctions), BenchmarkError> {
 							Err(BenchmarkError::Skip)
 						}
 
 						fn transact_origin_and_runtime_call()
-							-> Result<(MultiLocation, RuntimeCall), BenchmarkError> {
-							Ok((MultiLocation::parent(), frame_system::Call::remark_with_event {
+							-> Result<(Location, RuntimeCall), BenchmarkError> {
+							Ok((Location::parent(), frame_system::Call::remark_with_event {
 								remark: vec![]
 							}.into()))
 						}
 
-						fn subscribe_origin() -> Result<MultiLocation, BenchmarkError> {
-							Ok(MultiLocation::parent())
+						fn subscribe_origin() -> Result<Location, BenchmarkError> {
+							Ok(Location::parent())
 						}
 
 						fn claimable_asset()
-							-> Result<(MultiLocation, MultiLocation, MultiAssets), BenchmarkError> {
-							let origin = MultiLocation::parent();
-							let assets: MultiAssets = (Concrete(MultiLocation::parent()), 1_000u128)
+							-> Result<(Location, Location, XcmAssets), BenchmarkError> {
+							let origin = Location::parent();
+							let assets: XcmAssets = (AssetId(Location::parent()), 1_000u128)
 								.into();
-							let ticket = MultiLocation { parents: 0, interior: Here };
+							let ticket = Location { parents: 0, interior: [].into() /* Here */ };
 							Ok((origin, ticket, assets))
 						}
 
+						fn fee_asset() -> Result<Asset, BenchmarkError> {
+							Err(BenchmarkError::Skip)
+						}
+
 						fn unlockable_asset()
-							-> Result<(MultiLocation, MultiLocation, MultiAsset), BenchmarkError> {
+							-> Result<(Location, Location, Asset), BenchmarkError> {
+							Err(BenchmarkError::Skip)
+						}
+
+						fn alias_origin() -> Result<(Location, Location), BenchmarkError> {
 							Err(BenchmarkError::Skip)
 						}
 					}
-
-					use moonbeam_xcm_benchmarks::generic::benchmarking as MoonbeamXcmBenchmarks;
-
-					use pallet_crowdloan_rewards::Pallet as PalletCrowdloanRewardsBench;
-					use pallet_parachain_staking::Pallet as ParachainStakingBench;
-					use pallet_author_mapping::Pallet as PalletAuthorMappingBench;
-					use pallet_author_slot_filter::Pallet as PalletAuthorSlotFilter;
-					use pallet_moonbeam_orbiters::Pallet as PalletMoonbeamOrbiters;
-					use pallet_author_inherent::Pallet as PalletAuthorInherent;
-					use pallet_asset_manager::Pallet as PalletAssetManagerBench;
-					use pallet_xcm_transactor::Pallet as XcmTransactorBench;
-					use pallet_randomness::Pallet as RandomnessBench;
-					use pallet_migrations::Pallet as MigrationsBench;
-					use MoonbeamXcmBenchmarks::XcmGenericBenchmarks as MoonbeamXcmGenericBench;
 
 					let whitelist: Vec<TrackedStorageKey> = vec![
 						// Block Number
@@ -770,76 +1014,7 @@ macro_rules! impl_runtime_apis_plus_common {
 					let mut batches = Vec::<BenchmarkBatch>::new();
 					let params = (&config, &whitelist);
 
-					add_benchmark!(
-						params,
-						batches,
-						parachain_staking,
-						ParachainStakingBench::<Runtime>
-					);
-					add_benchmark!(
-					params,
-						batches,
-						pallet_crowdloan_rewards,
-						PalletCrowdloanRewardsBench::<Runtime>
-					);
-					add_benchmark!(
-						params,
-						batches,
-						pallet_author_mapping,
-						PalletAuthorMappingBench::<Runtime>
-					);
-					add_benchmark!(params, batches, frame_system, SystemBench::<Runtime>);
-					add_benchmark!(
-						params,
-						batches,
-						pallet_author_slot_filter,
-						PalletAuthorSlotFilter::<Runtime>
-					);
-					add_benchmark!(
-						params,
-						batches,
-						pallet_moonbeam_orbiters,
-						PalletMoonbeamOrbiters::<Runtime>
-					);
-					add_benchmark!(
-						params,
-						batches,
-						pallet_author_inherent,
-						PalletAuthorInherent::<Runtime>
-					);
-					add_benchmark!(
-						params,
-						batches,
-						pallet_asset_manager,
-						PalletAssetManagerBench::<Runtime>
-					);
-					add_benchmark!(
-						params,
-						batches,
-						xcm_transactor,
-						XcmTransactorBench::<Runtime>
-					);
-
-					add_benchmark!(
-						params,
-						batches,
-						pallet_randomness,
-						RandomnessBench::<Runtime>
-					);
-
-					add_benchmark!(
-						params,
-						batches,
-						pallet_migrations,
-						MigrationsBench::<Runtime>
-					);
-
-					add_benchmark!(
-						params,
-						batches,
-						moonbeam_xcm_benchmarks_generic,
-						MoonbeamXcmGenericBench::<Runtime>
-					);
+					add_benchmarks!(params, batches);
 
 					if batches.is_empty() {
 						return Err("Benchmark not found for this pallet.".into());

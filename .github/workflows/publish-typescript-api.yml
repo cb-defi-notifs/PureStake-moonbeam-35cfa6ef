@@ -11,20 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.sha }}
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.10.0
       - name: Build typescript API
         run: |
           cd typescript-api
           npm install
           npm run build
       - name: Publish typescript API
-        uses: JS-DevTools/npm-publish@v1
+        uses: JS-DevTools/npm-publish@v3
         with:
           token: ${{ secrets.NPM_TOKEN }}
           package: typescript-api/build/package.json
@@ -34,17 +34,21 @@ jobs:
     needs: ["publish-typescript-api"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.sha }}
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - name: Use pnpm
+        uses: pnpm/action-setup@v3
         with:
-          node-version: 18.x
+          version: 8.6.12
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
       - name: Upgrade polkadotjs for tests
         run: |
-          cd tests
-          npm install @polkadot/api@latest
+          cd test
+          pnpm install @polkadot/api@latest
       - name: Upgrade polkadotjs for tools
         run: |
           cd tools

@@ -24,6 +24,7 @@ use super::*;
 use crate::currency::*;
 use frame_support::traits::{EitherOf, MapSuccess};
 use frame_system::EnsureRootWithSuccess;
+use moonbeam_runtime_common::weights as moonbeam_weights;
 use sp_runtime::traits::Replace;
 
 parameter_types! {
@@ -31,13 +32,13 @@ parameter_types! {
 }
 
 impl pallet_conviction_voting::Config for Runtime {
-	type WeightInfo = pallet_conviction_voting::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = moonbeam_weights::pallet_conviction_voting::WeightInfo<Runtime>;
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = Balances;
 	type Polls = Referenda;
 	type MaxTurnout = frame_support::traits::TotalIssuanceOf<Balances, Self::AccountId>;
 	// Maximum number of concurrent votes an account may have
-	type MaxVotes = ConstU32<512>;
+	type MaxVotes = ConstU32<20>;
 	// Minimum period of vote locking
 	type VoteLockingPeriod = VoteLockingPeriod;
 }
@@ -45,17 +46,20 @@ impl pallet_conviction_voting::Config for Runtime {
 parameter_types! {
 	pub const AlarmInterval: BlockNumber = 1;
 	pub const SubmissionDeposit: Balance = 10 * UNIT * SUPPLY_FACTOR;
-	pub const UndecidingTimeout: BlockNumber = 14 * DAYS;
+	pub const UndecidingTimeout: BlockNumber = 21 * DAYS;
 }
 
 pub type GeneralAdminOrRoot = EitherOf<EnsureRoot<AccountId>, origins::GeneralAdmin>;
+
+/// The policy allows for Root or FastGeneralAdmin.
+pub type FastGeneralAdminOrRoot = EitherOf<EnsureRoot<AccountId>, origins::FastGeneralAdmin>;
 
 impl custom_origins::Config for Runtime {}
 
 // The purpose of this pallet is to queue calls to be dispatched as by root later => the Dispatch
 // origin corresponds to the Gov2 Whitelist track.
 impl pallet_whitelist::Config for Runtime {
-	type WeightInfo = pallet_whitelist::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = moonbeam_weights::pallet_whitelist::WeightInfo<Runtime>;
 	type RuntimeEvent = RuntimeEvent;
 	type RuntimeCall = RuntimeCall;
 	type WhitelistOrigin = EitherOf<
@@ -77,7 +81,7 @@ impl pallet_whitelist::Config for Runtime {
 pallet_referenda::impl_tracksinfo_get!(TracksInfo, Balance, BlockNumber);
 
 impl pallet_referenda::Config for Runtime {
-	type WeightInfo = pallet_referenda::weights::SubstrateWeight<Runtime>;
+	type WeightInfo = moonbeam_weights::pallet_referenda::WeightInfo<Runtime>;
 	type RuntimeCall = RuntimeCall;
 	type RuntimeEvent = RuntimeEvent;
 	type Scheduler = Scheduler;

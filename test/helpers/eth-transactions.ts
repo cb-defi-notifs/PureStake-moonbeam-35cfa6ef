@@ -1,14 +1,15 @@
 import "@moonbeam-network/api-augment";
+import { DevModeContext, expect } from "@moonwall/cli";
 import { EventRecord } from "@polkadot/types/interfaces";
 import {
-  EvmCoreErrorExitReason,
-  EvmCoreErrorExitSucceed,
   EvmCoreErrorExitError,
-  EvmCoreErrorExitRevert,
   EvmCoreErrorExitFatal,
+  EvmCoreErrorExitReason,
+  EvmCoreErrorExitRevert,
+  EvmCoreErrorExitSucceed,
 } from "@polkadot/types/lookup";
-import { ethers, JsonRpcProvider } from "ethers";
-import { expect } from "@moonwall/cli";
+import { fromHex } from "viem";
+
 export type Errors = {
   Succeed: EvmCoreErrorExitSucceed["type"];
   Error: EvmCoreErrorExitError["type"];
@@ -16,15 +17,14 @@ export type Errors = {
   Fatal: EvmCoreErrorExitFatal["type"];
 };
 
-export async function extractRevertReason(responseHash: string, provider: JsonRpcProvider) {
-  const tx = (await provider.getTransaction(responseHash))!;
+export async function extractRevertReason(context: DevModeContext, responseHash: string) {
+  const tx = (await context.ethers().provider!.getTransaction(responseHash))!;
   try {
-    await provider.call({ to: tx.to, data: tx.data });
-    provider.call;
+    await context.ethers().call({ to: tx.to, data: tx.data, gasLimit: tx.gasLimit });
     return null;
-  } catch (e) {
-    const jsonError = JSON.parse(e.error.body);
-    return jsonError.error.message.split("VM Exception while processing transaction: revert ")[1];
+  } catch (e: any) {
+    const errorMessage = e.info.error.message;
+    return errorMessage.split("VM Exception while processing transaction: revert ")[1];
   }
 }
 
@@ -72,4 +72,24 @@ export function expectEVMResult<T extends Errors, Type extends keyof T>(
         `Invalid EVM Execution ${ethereumResult.type} Reason`
       ).to.equal(reason);
   }
+}
+
+export async function getTransactionFees(context: DevModeContext, hash: string): Promise<bigint> {
+  const receipt = await context.viem().getTransactionReceipt({ hash: hash as `0x${string}` });
+
+  return receipt.gasUsed * receipt.effectiveGasPrice;
+}
+
+export function getSignatureParameters(signature: string) {
+  const r = signature.slice(0, 66); // 32 bytes
+  const s = `0x${signature.slice(66, 130)}`; // 32 bytes
+  let v = fromHex(`0x${signature.slice(130, 132)}`, "number"); // 1 byte
+
+  if (![27, 28].includes(v)) v += 27; // not sure why we coerce 27
+
+  return {
+    r,
+    s,
+    v,
+  };
 }

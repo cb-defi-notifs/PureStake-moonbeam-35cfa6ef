@@ -25,8 +25,7 @@ use crate::{
 use frame_benchmarking::{account, benchmarks, impl_benchmark_test_suite};
 use frame_support::traits::{Currency, Get, OnInitialize, ReservableCurrency};
 use frame_system::RawOrigin;
-use sp_runtime::traits::Saturating;
-use sp_runtime::traits::StaticLookup;
+use sp_runtime::traits::{Saturating, StaticLookup};
 
 const MIN_ORBITER_DEPOSIT: u32 = 10_000;
 const USER_SEED: u32 = 999666;
@@ -40,8 +39,8 @@ fn init<T: Config>() {
 fn create_funded_user<T: Config>(string: &'static str, n: u32, balance: u32) -> T::AccountId {
 	const SEED: u32 = 0;
 	let user = account(string, n, SEED);
-	T::Currency::make_free_balance_be(&user, balance.into());
-	T::Currency::issue(balance.into());
+	let _ = T::Currency::make_free_balance_be(&user, balance.into());
+	let _ = T::Currency::issue(balance.into());
 	user
 }
 
@@ -288,9 +287,11 @@ mod tests {
 	use frame_support::assert_ok;
 	use parity_scale_codec::Encode;
 	use sp_io::TestExternalities;
+	use sp_runtime::BuildStorage;
+
 	pub fn new_test_ext() -> TestExternalities {
-		let mut t = frame_system::GenesisConfig::default()
-			.build_storage::<Test>()
+		let mut t = frame_system::GenesisConfig::<Test>::default()
+			.build_storage()
 			.unwrap();
 		let min_orbiter_deposit_prefix =
 			frame_support::storage::storage_prefix(b"MoonbeamOrbiters", b"MinOrbiterDeposit");

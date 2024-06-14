@@ -21,7 +21,6 @@
 use core::marker::PhantomData;
 use fp_evm::Log;
 use frame_support::{
-	dispatch::Dispatchable,
 	dispatch::{GetDispatchInfo, Pays, PostDispatchInfo},
 	sp_runtime::traits::Hash,
 	traits::ConstU32,
@@ -31,6 +30,7 @@ use pallet_evm::AddressMapping;
 use parity_scale_codec::DecodeLimit as _;
 use precompile_utils::prelude::*;
 use sp_core::{Decode, Get, H160, H256};
+use sp_runtime::traits::Dispatchable;
 use sp_std::{boxed::Box, vec::Vec};
 
 #[cfg(test)]
@@ -136,6 +136,7 @@ where
 				proposal,
 				length_bound: proposal_length,
 			},
+			SYSTEM_ACCOUNT_SIZE,
 		)?;
 
 		log.record(handle)?;
@@ -196,6 +197,7 @@ where
 					proposal,
 					length_bound: proposal_length,
 				},
+				SYSTEM_ACCOUNT_SIZE,
 			)?;
 		}
 
@@ -230,6 +232,7 @@ where
 				index: proposal_index,
 				approve,
 			},
+			SYSTEM_ACCOUNT_SIZE,
 		)?;
 
 		log.record(handle)?;
@@ -262,6 +265,7 @@ where
 				),
 				length_bound,
 			},
+			SYSTEM_ACCOUNT_SIZE,
 		)?;
 
 		// We can know if the proposal was executed or not based on the `pays_fee` in

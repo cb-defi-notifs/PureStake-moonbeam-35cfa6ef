@@ -18,7 +18,7 @@
 
 use evm::ExitReason;
 use fp_evm::{Context, PrecompileFailure, PrecompileHandle, Transfer};
-use frame_support::dispatch::{Dispatchable, GetDispatchInfo, PostDispatchInfo};
+use frame_support::dispatch::{GetDispatchInfo, PostDispatchInfo};
 use pallet_balances::Call as BalancesCall;
 use pallet_evm::AddressMapping;
 use pallet_proxy::Call as ProxyCall;
@@ -28,7 +28,7 @@ use precompile_utils::prelude::*;
 use sp_core::{Get, H160, U256};
 use sp_runtime::{
 	codec::Decode,
-	traits::{ConstU32, StaticLookup, Zero},
+	traits::{ConstU32, Dispatchable, StaticLookup, Zero},
 };
 use sp_std::marker::PhantomData;
 
@@ -197,7 +197,7 @@ where
 		}
 		.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(())
 	}
@@ -233,7 +233,7 @@ where
 		}
 		.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(())
 	}
@@ -247,7 +247,7 @@ where
 		let origin = Runtime::AddressMapping::into_account_id(handle.context().caller);
 		let call: ProxyCall<Runtime> = ProxyCall::<Runtime>::remove_proxies {}.into();
 
-		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call)?;
+		<RuntimeHelper<Runtime>>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(())
 	}
@@ -353,7 +353,8 @@ where
 		evm_subcall: EvmSubCall,
 	) -> EvmResult {
 		// Check that we only perform proxy calls on behalf of externally owned accounts
-		let AddressType::EOA = precompile_set::get_address_type::<Runtime>(handle, real.into())? else {
+		let AddressType::EOA = precompile_set::get_address_type::<Runtime>(handle, real.into())?
+		else {
 			return Err(revert("real address must be EOA"));
 		};
 
@@ -410,7 +411,7 @@ where
 			RuntimeHelper::<Runtime>::try_dispatch(
 				handle,
 				Some(contract_address).into(),
-				pallet_balances::Call::<Runtime>::transfer {
+				pallet_balances::Call::<Runtime>::transfer_allow_death {
 					dest: Runtime::Lookup::unlookup(who),
 					value: {
 						let balance: <Runtime as pallet_balances::Config<()>>::Balance =
@@ -421,6 +422,7 @@ where
 						balance
 					},
 				},
+				SYSTEM_ACCOUNT_SIZE,
 			)?;
 
 			Some(Transfer {

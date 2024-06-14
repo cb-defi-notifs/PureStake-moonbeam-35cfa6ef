@@ -25,7 +25,6 @@ use scale_info::TypeInfo;
 use sha3::{Digest, Keccak256};
 use sp_core::{ecdsa, H160};
 
-#[cfg(feature = "std")]
 pub use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 //TODO Maybe this should be upstreamed into Frontier (And renamed accordingly) so that it can
@@ -42,7 +41,6 @@ pub use serde::{de::DeserializeOwned, Deserialize, Serialize};
 )]
 pub struct AccountId20(pub [u8; 20]);
 
-#[cfg(feature = "std")]
 impl_serde::impl_fixed_hash_serde!(AccountId20, 20);
 
 #[cfg(feature = "std")]
@@ -73,11 +71,21 @@ impl From<AccountId20> for [u8; 20] {
 	}
 }
 
+// NOTE: the implementation is lossy, and is intended to be used
+// only to convert from Polkadot accounts to AccountId20.
+// See https://github.com/moonbeam-foundation/moonbeam/pull/2315#discussion_r1205830577
+// DO NOT USE IT FOR ANYTHING ELSE.
 impl From<[u8; 32]> for AccountId20 {
 	fn from(bytes: [u8; 32]) -> Self {
 		let mut buffer = [0u8; 20];
 		buffer.copy_from_slice(&bytes[..20]);
 		Self(buffer)
+	}
+}
+impl From<sp_runtime::AccountId32> for AccountId20 {
+	fn from(account: sp_runtime::AccountId32) -> Self {
+		let bytes: &[u8; 32] = account.as_ref();
+		Self::from(*bytes)
 	}
 }
 
@@ -103,13 +111,28 @@ impl std::str::FromStr for AccountId20 {
 	}
 }
 
-#[cfg_attr(feature = "std", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Eq, PartialEq, Clone, Encode, Decode, sp_core::RuntimeDebug, TypeInfo)]
+#[derive(
+	Eq, PartialEq, Clone, Encode, Decode, sp_core::RuntimeDebug, TypeInfo, Serialize, Deserialize,
+)]
 pub struct EthereumSignature(ecdsa::Signature);
 
 impl From<ecdsa::Signature> for EthereumSignature {
 	fn from(x: ecdsa::Signature) -> Self {
 		EthereumSignature(x)
+	}
+}
+
+impl From<sp_runtime::MultiSignature> for EthereumSignature {
+	fn from(signature: sp_runtime::MultiSignature) -> Self {
+		match signature {
+			sp_runtime::MultiSignature::Ed25519(_) => {
+				panic!("Ed25519 not supported for EthereumSignature")
+			}
+			sp_runtime::MultiSignature::Sr25519(_) => {
+				panic!("Sr25519 not supported for EthereumSignature")
+			}
+			sp_runtime::MultiSignature::Ecdsa(sig) => Self(sig),
+		}
 	}
 }
 

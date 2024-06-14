@@ -13,7 +13,6 @@
 
 //! Custom origins for governance interventions.
 #![cfg_attr(not(feature = "std"), no_std)]
-
 pub use custom_origins::*;
 
 #[frame_support::pallet]
@@ -41,6 +40,8 @@ pub mod custom_origins {
 		ReferendumCanceller,
 		/// Origin able to kill referenda.
 		ReferendumKiller,
+		/// Fast General Admin
+		FastGeneralAdmin,
 	}
 
 	macro_rules! decl_unit_ensures {
@@ -77,6 +78,7 @@ pub mod custom_origins {
 		ReferendumCanceller,
 		ReferendumKiller,
 		WhitelistedCaller,
-		GeneralAdmin
+		GeneralAdmin,
+		FastGeneralAdmin,
 	);
 }

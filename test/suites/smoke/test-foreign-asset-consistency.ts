@@ -2,16 +2,14 @@ import "@moonbeam-network/api-augment";
 import { ApiDecoration } from "@polkadot/api/types";
 import { describeSuite, expect, beforeAll } from "@moonwall/cli";
 import { ApiPromise } from "@polkadot/api";
-import { rateLimiter } from "../../helpers/common.js";
 
 describeSuite({
-  id: "S1000",
+  id: "S12",
   title: `Verifying foreign asset count, mapping, assetIds and deposits`,
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let atBlockNumber: number = 0;
     let apiAt: ApiDecoration<"promise">;
-    const limiter = rateLimiter();
     const foreignAssetIdType: { [assetId: string]: string } = {};
     const foreignAssetTypeId: { [assetType: string]: string } = {};
     const foreignXcmAcceptedAssets: string[] = [];
@@ -20,45 +18,43 @@ describeSuite({
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       // Configure the api at a specific block
       // (to avoid inconsistency querying over multiple block when the test takes a long time to
       // query data and blocks are being produced)
       atBlockNumber = process.env.BLOCK_NUMBER
         ? parseInt(process.env.BLOCK_NUMBER)
-        : (await limiter.schedule(() => paraApi.rpc.chain.getHeader())).number.toNumber();
+        : (await paraApi.rpc.chain.getHeader()).number.toNumber();
 
-      apiAt = await limiter.schedule(async () =>
-        paraApi.at(await limiter.schedule(() => paraApi.rpc.chain.getBlockHash(atBlockNumber)))
-      );
+      apiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
       specVersion = apiAt.consts.system.version.specVersion.toNumber();
 
-      let query = await limiter.schedule(() => apiAt.query.assetManager.assetIdType.entries());
+      let query = await apiAt.query.assetManager.assetIdType.entries();
       query.forEach(([key, exposure]) => {
-        let assetId = key.args.toString();
+        const assetId = key.args.toString();
         foreignAssetIdType[assetId] = exposure.unwrap().toString();
       });
-      query = await limiter.schedule(() => apiAt.query.assetManager.assetTypeId.entries());
+      query = await apiAt.query.assetManager.assetTypeId.entries();
       query.forEach(([key, exposure]) => {
-        let assetType = key.args.toString();
+        const assetType = key.args.toString();
         foreignAssetTypeId[assetType] = exposure.unwrap().toString();
       });
 
-      query = await limiter.schedule(() =>
-        apiAt.query.assetManager.assetTypeUnitsPerSecond.entries()
-      );
+      query = await apiAt.query.assetManager.assetTypeUnitsPerSecond.entries();
+
       query.forEach(([key, _]) => {
-        let assetType = key.args.toString();
+        const assetType = key.args.toString();
         foreignXcmAcceptedAssets.push(assetType);
       });
 
       if (specVersion >= 2200) {
-        liveForeignAssets = (
-          await limiter.schedule(() => apiAt.query.assets.asset.entries())
-        ).reduce((acc, [key, value]) => {
-          acc[key.args.toString()] = (value.unwrap() as any).status.isLive;
-          return acc;
-        }, {});
+        liveForeignAssets = (await apiAt.query.assets.asset.entries()).reduce(
+          (acc, [key, value]) => {
+            acc[key.args.toString()] = (value.unwrap() as any).status.isLive;
+            return acc;
+          },
+          {} as any
+        );
       }
     });
 
@@ -68,7 +64,7 @@ describeSuite({
       test: async function () {
         expect(
           foreignXcmAcceptedAssets.length,
-          `Number of local asset deposits does not much number of local assets`
+          `Number of foreign asset deposits does not match the number of foreign assets`
         ).to.be.lessThanOrEqual(Object.keys(foreignAssetIdType).length);
 
         log(
@@ -86,7 +82,7 @@ describeSuite({
         const failedAssetReserveMappings: { assetId: string }[] = [];
 
         for (const assetId of Object.keys(foreignAssetIdType)) {
-          let assetType = foreignAssetIdType[assetId];
+          const assetType = foreignAssetIdType[assetId];
           if (foreignAssetTypeId[assetType] != assetId) {
             failedAssetReserveMappings.push({ assetId: assetId });
           }
@@ -95,7 +91,7 @@ describeSuite({
         expect(
           failedAssetReserveMappings.length,
           `Failed foreign asset entries: ${failedAssetReserveMappings
-            .map(({ assetId }) => `expected: ${assetId} to be present in localAssets `)
+            .map(({ assetId }) => `expected: ${assetId} to be present in foreignAssets `)
             .join(`, `)}`
         ).to.equal(0);
         log(
@@ -121,7 +117,7 @@ describeSuite({
         expect(
           failedXcmPaymentAssets.length,
           `Failed xcm fee assets: ${failedXcmPaymentAssets
-            .map(({ assetType }) => `expected: ${assetType} to be present in localAssets `)
+            .map(({ assetType }) => `expected: ${assetType} to be present in foreignAssets `)
             .join(`\n`)}`
         ).to.equal(0);
         log(

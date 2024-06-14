@@ -1,5 +1,5 @@
-import { DevModeContext, customDevRpcRequest, fetchCompiledContract } from "@moonwall/cli";
-import { PRECOMPILE_XCM_UTILS_ADDRESS } from "@moonwall/util";
+import { DevModeContext, customDevRpcRequest } from "@moonwall/cli";
+import { ALITH_ADDRESS } from "@moonwall/util";
 import { AssetMetadata, XcmpMessageFormat } from "@polkadot/types/interfaces";
 import {
   CumulusPalletParachainSystemRelayStateSnapshotMessagingStateSnapshot,
@@ -8,7 +8,7 @@ import {
 } from "@polkadot/types/lookup";
 import { BN, stringToU8a, u8aToHex } from "@polkadot/util";
 import { xxhashAsU8a } from "@polkadot/util-crypto";
-import { encodeFunctionData } from "viem";
+import { RELAY_V3_SOURCE_LOCATION } from "./assets.js";
 
 // Creates and returns the tx that overrides the paraHRMP existence
 // This needs to be inserted at every block in which you are willing to test
@@ -16,10 +16,10 @@ import { encodeFunctionData } from "viem";
 // The reason is that set_validation_data inherent overrides it
 export function mockHrmpChannelExistanceTx(
   context: DevModeContext,
-  para: Number,
-  maxCapacity: Number,
-  maxTotalSize: Number,
-  maxMessageSize: Number
+  para: number,
+  maxCapacity: number,
+  maxTotalSize: number,
+  maxMessageSize: number
 ) {
   // This constructs the relevant state to be inserted
   const relevantMessageState = {
@@ -89,7 +89,7 @@ export async function registerForeignAsset(
   );
   // Look for assetId in events
   const registeredAssetId = result!.events
-    .find(({ event: { section } }) => section.toString() === "assetManager")
+    .find(({ event: { section } }) => section.toString() === "assetManager")!
     .event.data[0].toHex()
     .replace(/,/g, "");
 
@@ -101,7 +101,11 @@ export async function registerForeignAsset(
         context
           .polkadotJs()
           .tx.assetManager.setAssetUnitsPerSecond(asset, unitsPerSecond, numAssetsWeightHint!)
-      )
+      ),
+    {
+      expectEvents: [context.polkadotJs().events.assetManager.UnitsPerSecondChanged],
+      allowFailures: false,
+    }
   );
   // check asset in storage
   const registeredAsset = (
@@ -116,7 +120,7 @@ export async function registerForeignAsset(
 
 export function descendOriginFromAddress20(
   context: DevModeContext,
-  address: string = "0x0101010101010101010101010101010101010101",
+  address: `0x${string}` = "0x0101010101010101010101010101010101010101",
   paraId: number = 1
 ) {
   const toHash = new Uint8Array([
@@ -169,22 +173,31 @@ export async function injectHrmpMessage(
   paraId: number,
   message?: RawXcmMessage
 ) {
-  let totalMessage = message != null ? buildXcmpMessage(context, message) : [];
+  const totalMessage = message != null ? buildXcmpMessage(context, message) : [];
   // Send RPC call to inject XCM message
   await customDevRpcRequest("xcm_injectHrmpMessage", [paraId, totalMessage]);
 }
+
+export async function injectEncodedHrmpMessageAndSeal(
+  context: DevModeContext,
+  paraId: number,
+  message?: number[]
+) {
+  // Send RPC call to inject XCM message
+  await customDevRpcRequest("xcm_injectHrmpMessage", [paraId, message]);
+  // Create a block in which the XCM will be enqueued
+  await context.createBlock();
+  // The next block will process the hrmp message in the message queue
+  return context.createBlock();
+}
+
 // Weight a particular message using the xcm utils precompile
 export async function weightMessage(context: DevModeContext, message: XcmVersionedXcm) {
-  const XCM_UTILS_CONTRACT = await fetchCompiledContract("precompiles/xcm-utils/XcmUtils");
-  const result = await context.viem("public").call({
-    to: PRECOMPILE_XCM_UTILS_ADDRESS,
-    data: encodeFunctionData({
-      abi: XCM_UTILS_CONTRACT.abi,
-      functionName: "weightMessage",
-      args: [message.toU8a()],
-    }),
-  });
-  return BigInt(result.data as string);
+  return (await context.readPrecompile!({
+    precompileName: "XcmUtils",
+    functionName: "weightMessage",
+    args: [message.toHex()],
+  })) as bigint;
 }
 
 // export async function weightMessage(context: DevModeContext, message?: XcmVersionedXcm) {
@@ -201,15 +214,20 @@ export async function injectHrmpMessageAndSeal(
   message?: RawXcmMessage
 ) {
   await injectHrmpMessage(context, paraId, message);
-  // Create a block in which the XCM will be executed
+  // Create a block in which the XCM will be enqueued
+  await context.createBlock();
+  // The next block will process the hrmp message in the message queue
   await context.createBlock();
 }
 
 interface Junction {
   Parachain?: number;
-  AccountId32?: { network: "Any" | XcmV3JunctionNetworkId["type"]; id: Uint8Array | string };
-  AccountIndex64?: { network: "Any" | XcmV3JunctionNetworkId["type"]; index: number };
-  AccountKey20?: { network: "Any" | XcmV3JunctionNetworkId["type"]; key: Uint8Array | string };
+  AccountId32?: { network: "Any" | XcmV3JunctionNetworkId["type"] | null; id: Uint8Array | string };
+  AccountIndex64?: { network: "Any" | XcmV3JunctionNetworkId["type"] | null; index: number };
+  AccountKey20?: {
+    network: "Any" | XcmV3JunctionNetworkId["type"] | null;
+    key: Uint8Array | string;
+  };
   PalletInstance?: number;
   GeneralIndex?: bigint;
   GeneralKey?: { length: number; data: Uint8Array };
@@ -240,7 +258,12 @@ export interface XcmFragmentConfig {
     multilocation: MultiLocation;
     fungible: bigint;
   }[];
-  weight_limit?: BN;
+  weight_limit?:
+    | BN
+    | {
+        refTime: BN | number | bigint;
+        proofSize: BN | number | bigint;
+      };
   descend_origin?: string;
   beneficiary?: string;
 }
@@ -291,7 +314,7 @@ export class XcmFragment {
       this.config.weight_limit != null
         ? { Limited: this.config.weight_limit }
         : { Unlimited: null };
-    for (var i = 0; i < repeat; i++) {
+    for (let i = 0; i < repeat; i++) {
       this.instructions.push({
         BuyExecution: {
           fees: {
@@ -310,7 +333,7 @@ export class XcmFragment {
   // Add one or more `BuyExecution` instruction
   // if weight_limit is not set in config, then we put unlimited
   refund_surplus(repeat: bigint = 1n): this {
-    for (var i = 0; i < repeat; i++) {
+    for (let i = 0; i < repeat; i++) {
       this.instructions.push({
         RefundSurplus: null,
       });
@@ -333,7 +356,7 @@ export class XcmFragment {
         // Ticket seems to indicate the version of the assets
         ticket: {
           parents: 0,
-          interior: { X1: { GeneralIndex: 3 } },
+          interior: { X1: { GeneralIndex: 4 } },
         },
       },
     });
@@ -342,20 +365,20 @@ export class XcmFragment {
 
   // Add a `ClearOrigin` instruction
   clear_origin(repeat: bigint = 1n): this {
-    for (var i = 0; i < repeat; i++) {
+    for (let i = 0; i < repeat; i++) {
       this.instructions.push({ ClearOrigin: null as any });
     }
     return this;
   }
 
   // Add a `DescendOrigin` instruction
-  descend_origin(): this {
+  descend_origin(network: "Any" | XcmV3JunctionNetworkId["type"] | null = null): this {
     if (this.config.descend_origin != null) {
       this.instructions.push({
         DescendOrigin: {
           X1: {
             AccountKey20: {
-              network: "Any",
+              network,
               key: this.config.descend_origin,
             },
           },
@@ -409,8 +432,8 @@ export class XcmFragment {
   }
 
   // Add a `SetErrorHandler` instruction, appending all the nested instructions
-  set_error_handler_with(callbacks: Function[]): this {
-    let error_instructions: any[] = [];
+  set_error_handler_with(callbacks: XcmCallback[]): this {
+    const error_instructions: any[] = [];
     callbacks.forEach((cb) => {
       cb.call(this);
       // As each method in the class pushes to the instruction stack, we pop
@@ -423,8 +446,8 @@ export class XcmFragment {
   }
 
   // Add a `SetAppendix` instruction, appending all the nested instructions
-  set_appendix_with(callbacks: Function[]): this {
-    let appendix_instructions: any[] = [];
+  set_appendix_with(callbacks: XcmCallback[]): this {
+    const appendix_instructions: any[] = [];
     callbacks.forEach((cb) => {
       cb.call(this);
       // As each method in the class pushes to the instruction stack, we pop
@@ -445,8 +468,8 @@ export class XcmFragment {
   }
 
   // Utility function to support functional style method call chaining bound to `this` context
-  with(callback: Function): this {
-    return callback.call(this);
+  with(callback: (this: this) => void): this {
+    return callback.call(this), this;
   }
 
   // Pushes the given instruction
@@ -465,7 +488,35 @@ export class XcmFragment {
   /// XCM V3 calls
   as_v3(): any {
     return {
-      V3: replaceNetworkAny(this.instructions),
+      V3: this.instructions,
+    };
+  }
+
+  /// XCM V4 calls
+  as_v4(): any {
+    const patchLocationV4recursively = (value: any) => {
+      // e.g. Convert this: { X1: { Parachain: 1000 } } to { X1: [ { Parachain: 1000 } ] }
+      if (value && typeof value == "object") {
+        if (Array.isArray(value)) {
+          return value.map(patchLocationV4recursively);
+        }
+        for (const k of Object.keys(value)) {
+          if (k === "Concrete" || k === "Abstract") {
+            return patchLocationV4recursively(value[k]);
+          }
+          if (k.match(/^X\d$/g) && !Array.isArray(value[k])) {
+            value[k] = Object.entries(value[k]).map(([k, v]) => ({
+              [k]: patchLocationV4recursively(v),
+            }));
+          } else {
+            value[k] = patchLocationV4recursively(value[k]);
+          }
+        }
+      }
+      return value;
+    };
+    return {
+      V4: this.instructions.map((inst) => patchLocationV4recursively(inst)),
     };
   }
 
@@ -559,7 +610,7 @@ export class XcmFragment {
   ): this {
     this.instructions.push({
       QueryPallet: {
-        module_name: stringToU8a(module_name),
+        module_name,
         response_info: {
           destination,
           query_id,
@@ -581,8 +632,8 @@ export class XcmFragment {
     this.instructions.push({
       ExpectPallet: {
         index,
-        name: stringToU8a(name),
-        module_name: stringToU8a(module_name),
+        name,
+        module_name,
         crate_major,
         min_crate_minor,
       },
@@ -632,7 +683,7 @@ export class XcmFragment {
     destination: Junctions = { X1: { Parachain: 1000 } }
   ): this {
     const callVec = stringToU8a(xcm_hex);
-    let xcm = Array.from(callVec);
+    const xcm = Array.from(callVec);
     this.instructions.push({
       ExportMessage: {
         network,
@@ -796,9 +847,9 @@ export class XcmFragment {
       .createType("XcmVersionedXcm", this.as_v2()) as any;
 
     const instructions = message.asV2;
-    for (var i = 0; i < instructions.length; i++) {
+    for (let i = 0; i < instructions.length; i++) {
       if (instructions[i].isBuyExecution == true) {
-        let newWeight = await weightMessage(context, message);
+        const newWeight = await weightMessage(context, message);
         this.instructions[i] = {
           BuyExecution: {
             fees: instructions[i].asBuyExecution.fees,
@@ -812,23 +863,55 @@ export class XcmFragment {
   }
 }
 
-function replaceNetworkAny(obj: AnyObject | Array<AnyObject>): any {
-  if (Array.isArray(obj)) {
-    return obj.map((item) => replaceNetworkAny(item));
-  } else if (typeof obj === "object" && obj !== null) {
-    const newObj: AnyObject = {};
-    for (const key in obj) {
-      if (key === "network" && obj[key] === "Any") {
-        newObj[key] = null;
-      } else {
-        newObj[key] = replaceNetworkAny(obj[key]);
-      }
-    }
-    return newObj;
-  }
-  return obj;
-}
+export const registerXcmTransactorAndContract = async (context: DevModeContext) => {
+  await context.createBlock(
+    context
+      .polkadotJs()
+      .tx.sudo.sudo(context.polkadotJs().tx.xcmTransactor.register(ALITH_ADDRESS, 0))
+  );
 
-type AnyObject = {
-  [key: string]: any;
+  await context.createBlock(
+    context
+      .polkadotJs()
+      .tx.sudo.sudo(
+        context
+          .polkadotJs()
+          .tx.xcmTransactor.setTransactInfo(
+            RELAY_V3_SOURCE_LOCATION,
+            { refTime: 1, proofSize: 64 * 1024 } as any,
+            { refTime: 20_000_000_000, proofSize: 256 * 1024 } as any,
+            { refTime: 1, proofSize: 64 * 1024 } as any
+          )
+      )
+  );
+
+  await context.createBlock(
+    context
+      .polkadotJs()
+      .tx.sudo.sudo(
+        context
+          .polkadotJs()
+          .tx.xcmTransactor.setFeePerSecond(RELAY_V3_SOURCE_LOCATION, 1000000000000n)
+      )
+  );
 };
+
+export const registerXcmTransactorDerivativeIndex = async (context: DevModeContext) => {
+  await context.createBlock(
+    context
+      .polkadotJs()
+      .tx.sudo.sudo(context.polkadotJs().tx.xcmTransactor.register(ALITH_ADDRESS, 0))
+  );
+};
+
+export const expectXcmEventMessage = async (context: DevModeContext, message: string) => {
+  const records = await context.polkadotJs().query.system.events();
+
+  const filteredEvents = records
+    .map(({ event }) => (context.polkadotJs().events.xcmpQueue.Fail.is(event) ? event : undefined))
+    .filter((event) => event);
+
+  return filteredEvents.length ? filteredEvents[0]!.data.error.toString() === message : false;
+};
+
+type XcmCallback = (this: XcmFragment) => void;

@@ -26,22 +26,23 @@ use cumulus_primitives_core::ParaId;
 use hex_literal::hex;
 use moonbase_runtime::{
 	currency::UNIT, AccountId, AuthorFilterConfig, AuthorMappingConfig, Balance, BalancesConfig,
-	CouncilCollectiveConfig, CrowdloanRewardsConfig, DemocracyConfig, EVMConfig, EligibilityValue,
-	EthereumChainIdConfig, EthereumConfig, GenesisAccount, GenesisConfig, InflationInfo,
-	MaintenanceModeConfig, OpenTechCommitteeCollectiveConfig, ParachainInfoConfig,
-	ParachainStakingConfig, PolkadotXcmConfig, Precompiles, Range, SudoConfig, SystemConfig,
-	TechCommitteeCollectiveConfig, TransactionPaymentConfig, TreasuryCouncilCollectiveConfig,
-	HOURS, WASM_BINARY,
+	CrowdloanRewardsConfig, EVMConfig, EligibilityValue, EthereumChainIdConfig, EthereumConfig,
+	GenesisAccount, InflationInfo, MaintenanceModeConfig, MoonbeamOrbitersConfig,
+	OpenTechCommitteeCollectiveConfig, ParachainInfoConfig, ParachainStakingConfig,
+	PolkadotXcmConfig, Precompiles, Range, RuntimeGenesisConfig, SudoConfig,
+	TransactionPaymentConfig, TreasuryCouncilCollectiveConfig, XcmTransactorConfig, HOURS,
+	WASM_BINARY,
 };
 use nimbus_primitives::NimbusId;
 use pallet_transaction_payment::Multiplier;
 use sc_service::ChainType;
 #[cfg(test)]
 use sp_core::ecdsa;
-use sp_runtime::{Perbill, Percent};
+use sp_runtime::{traits::One, Perbill, Percent};
 
 /// Specialized `ChainSpec`. This is a specialization of the general Substrate ChainSpec type.
-pub type ChainSpec = sc_service::GenericChainSpec<GenesisConfig, Extensions>;
+pub type ChainSpec =
+	sc_service::GenericChainSpec<RuntimeGenesisConfig, Extensions, crate::HostFunctions>;
 
 /// Generate a chain spec for use with the development service.
 pub fn development_chain_spec(mnemonic: Option<String>, num_accounts: Option<u32>) -> ChainSpec {
@@ -55,156 +56,126 @@ pub fn development_chain_spec(mnemonic: Option<String>, num_accounts: Option<u32
 		"6Be02d1d3665660d22FF9624b7BE0551ee1Ac91b"
 	)));
 
-	ChainSpec::from_genesis(
-		"Moonbase Development Testnet",
-		"moonbase_dev",
-		ChainType::Development,
-		move || {
-			testnet_genesis(
-				// Alith is Sudo
-				accounts[0],
-				// Council members: Baltathar, Charleth and Dorothy
-				vec![accounts[1], accounts[2], accounts[3]],
-				// Tech comitee members: Alith and Baltathar
-				vec![accounts[0], accounts[1]],
-				// Treasury Council members: Baltathar, Charleth and Dorothy
-				vec![accounts[1], accounts[2], accounts[3]],
-				// Open Tech committee members: Alith and Baltathar
-				vec![accounts[0], accounts[1]],
-				// Collator Candidate: Alice -> Alith
-				vec![(
-					accounts[0],
-					get_from_seed::<NimbusId>("Alice"),
-					1_000 * UNIT,
-				)],
-				// Delegations
-				vec![],
-				accounts.clone(),
-				3_000_000 * UNIT,
-				Default::default(), // para_id
-				1281,               //ChainId
-			)
-		},
-		// Bootnodes
-		vec![],
-		// Telemetry
-		None,
-		// Protocol ID
-		None,
-		// Fork ID
-		None,
-		// Properties
-		Some(
-			serde_json::from_str(
-				"{\"tokenDecimals\": 18, \"tokenSymbol\": \"UNIT\", \"SS58Prefix\": 1287}",
-			)
-			.expect("Provided valid json map"),
-		),
-		// Extensions
+	// Prefund the benchmark account for frontier, if compiling for benchmarks
+	#[cfg(feature = "runtime-benchmarks")]
+	accounts.push(AccountId::from(hex!(
+		"1000000000000000000000000000000000000001"
+	)));
+
+	ChainSpec::builder(
+		WASM_BINARY.expect("WASM binary was not build, please build it!"),
 		Extensions {
 			relay_chain: "dev-service".into(),
 			para_id: Default::default(),
 		},
 	)
+	.with_name("Moonbase Development Testnet")
+	.with_id("moonbase_dev")
+	.with_chain_type(ChainType::Development)
+	.with_properties(
+		serde_json::from_str(
+			"{\"tokenDecimals\": 18, \"tokenSymbol\": \"UNIT\", \"SS58Prefix\": 1287}",
+		)
+		.expect("Provided valid json map"),
+	)
+	.with_genesis_config(testnet_genesis(
+		// Alith is Sudo
+		accounts[0],
+		// Treasury Council members: Baltathar, Charleth and Dorothy
+		vec![accounts[1], accounts[2], accounts[3]],
+		// Open Tech committee members: Alith, Baltathar and Charleth
+		vec![accounts[0], accounts[1], accounts[2]],
+		// Collator Candidate: Alice -> Alith
+		vec![(
+			accounts[0],
+			get_from_seed::<NimbusId>("Alice"),
+			1_000 * UNIT,
+		)],
+		// Delegations
+		vec![],
+		accounts.clone(),
+		3_000_000 * UNIT,
+		Default::default(), // para_id
+		1281,               //ChainId
+	))
+	.build()
 }
 
 /// Generate a default spec for the parachain service. Use this as a starting point when launching
 /// a custom chain.
 pub fn get_chain_spec(para_id: ParaId) -> ChainSpec {
-	ChainSpec::from_genesis(
-		// TODO Apps depends on this string to determine whether the chain is an ethereum compat
-		// or not. We should decide the proper strings, and update Apps accordingly.
-		// Or maybe Apps can be smart enough to say if the string contains "moonbeam" at all...
-		"Moonbase Local Testnet",
-		"moonbase_local",
-		ChainType::Local,
-		move || {
-			testnet_genesis(
-				// Alith is Sudo
-				AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
-				// Council members: Baltathar, Charleth and Dorothy
-				vec![
-					AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-					AccountId::from(hex!("798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc")),
-					AccountId::from(hex!("773539d4Ac0e786233D90A233654ccEE26a613D9")),
-				],
-				// Tech comitee members: Alith and Baltathar
-				vec![
-					AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
-					AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-				],
-				// Treasury Council members: Baltathar, Charleth and Dorothy
-				vec![
-					AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-					AccountId::from(hex!("798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc")),
-					AccountId::from(hex!("773539d4Ac0e786233D90A233654ccEE26a613D9")),
-				],
-				// Open Tech committee members: Alith and Baltathar
-				vec![
-					AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
-					AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-				],
-				// Collator Candidates
-				vec![
-					// Alice -> Alith
-					(
-						AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
-						get_from_seed::<NimbusId>("Alice"),
-						1_000 * UNIT,
-					),
-					// Bob -> Baltathar
-					(
-						AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-						get_from_seed::<NimbusId>("Bob"),
-						1_000 * UNIT,
-					),
-				],
-				// Delegations
-				vec![],
-				// Endowed: Alith, Baltathar, Charleth and Dorothy
-				vec![
-					AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
-					AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
-					AccountId::from(hex!("798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc")),
-					AccountId::from(hex!("773539d4Ac0e786233D90A233654ccEE26a613D9")),
-				],
-				3_000_000 * UNIT,
-				para_id,
-				1280, //ChainId
-			)
-		},
-		// Bootnodes
-		vec![],
-		// Telemetry
-		None,
-		// Protocol ID
-		None,
-		// Fork ID
-		None,
-		// Properties
-		Some(
-			serde_json::from_str(
-				"{\"tokenDecimals\": 18, \"tokenSymbol\": \"UNIT\", \"SS58Prefix\": 1287}",
-			)
-			.expect("Provided valid json map"),
-		),
-		// Extensions
+	ChainSpec::builder(
+		WASM_BINARY.expect("WASM binary was not build, please build it!"),
 		Extensions {
 			relay_chain: "westend-local".into(),
 			para_id: para_id.into(),
 		},
 	)
+	// TODO Apps depends on this string to determine whether the chain is an ethereum compat
+	// or not. We should decide the proper strings, and update Apps accordingly.
+	// Or maybe Apps can be smart enough to say if the string contains "moonbeam" at all...
+	.with_name("Moonbase Local Testnet")
+	.with_id("moonbase_local")
+	.with_chain_type(ChainType::Local)
+	.with_properties(
+		serde_json::from_str(
+			"{\"tokenDecimals\": 18, \"tokenSymbol\": \"UNIT\", \"SS58Prefix\": 1287}",
+		)
+		.expect("Provided valid json map"),
+	)
+	.with_genesis_config(testnet_genesis(
+		// Alith is Sudo
+		AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
+		// Treasury Council members: Baltathar, Charleth and Dorothy
+		vec![
+			AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
+			AccountId::from(hex!("798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc")),
+			AccountId::from(hex!("773539d4Ac0e786233D90A233654ccEE26a613D9")),
+		],
+		// Open Tech committee members: Alith and Baltathar
+		vec![
+			AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
+			AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
+		],
+		// Collator Candidates
+		vec![
+			// Alice -> Alith
+			(
+				AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
+				get_from_seed::<NimbusId>("Alice"),
+				1_000 * UNIT,
+			),
+			// Bob -> Baltathar
+			(
+				AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
+				get_from_seed::<NimbusId>("Bob"),
+				1_000 * UNIT,
+			),
+		],
+		// Delegations
+		vec![],
+		// Endowed: Alith, Baltathar, Charleth and Dorothy
+		vec![
+			AccountId::from(hex!("f24FF3a9CF04c71Dbc94D0b566f7A27B94566cac")),
+			AccountId::from(hex!("3Cd0A705a2DC65e5b1E1205896BaA2be8A07c6e0")),
+			AccountId::from(hex!("798d4Ba9baf0064Ec19eB4F0a1a45785ae9D6DFc")),
+			AccountId::from(hex!("773539d4Ac0e786233D90A233654ccEE26a613D9")),
+		],
+		3_000_000 * UNIT,
+		para_id,
+		1280, //ChainId
+	))
+	.build()
 }
 
 const COLLATOR_COMMISSION: Perbill = Perbill::from_percent(20);
 const PARACHAIN_BOND_RESERVE_PERCENT: Percent = Percent::from_percent(30);
 const BLOCKS_PER_ROUND: u32 = 2 * HOURS;
+const BLOCKS_PER_YEAR: u32 = 31_557_600 / 6;
 const NUM_SELECTED_CANDIDATES: u32 = 8;
 pub fn moonbase_inflation_config() -> InflationInfo<Balance> {
 	fn to_round_inflation(annual: Range<Perbill>) -> Range<Perbill> {
-		use pallet_parachain_staking::inflation::{
-			perbill_annual_to_perbill_round, BLOCKS_PER_YEAR,
-		};
+		use pallet_parachain_staking::inflation::perbill_annual_to_perbill_round;
 		perbill_annual_to_perbill_round(
 			annual,
 			// rounds per year
@@ -231,8 +202,6 @@ pub fn moonbase_inflation_config() -> InflationInfo<Balance> {
 
 pub fn testnet_genesis(
 	root_key: AccountId,
-	council_members: Vec<AccountId>,
-	tech_comittee_members: Vec<AccountId>,
 	treasury_council_members: Vec<AccountId>,
 	open_tech_committee_members: Vec<AccountId>,
 	candidates: Vec<(AccountId, NimbusId, Balance)>,
@@ -241,19 +210,15 @@ pub fn testnet_genesis(
 	crowdloan_fund_pot: Balance,
 	para_id: ParaId,
 	chain_id: u64,
-) -> GenesisConfig {
+) -> serde_json::Value {
 	// This is the simplest bytecode to revert without returning any data.
 	// We will pre-deploy it under all of our precompiles to ensure they can be called from
 	// within contracts.
 	// (PUSH1 0x00 PUSH1 0x00 REVERT)
 	let revert_bytecode = vec![0x60, 0x00, 0x60, 0x00, 0xFD];
 
-	GenesisConfig {
-		system: SystemConfig {
-			code: WASM_BINARY
-				.expect("WASM binary was not build, please build it!")
-				.to_vec(),
-		},
+	let config = RuntimeGenesisConfig {
+		system: Default::default(),
 		balances: BalancesConfig {
 			balances: endowed_accounts
 				.iter()
@@ -269,8 +234,12 @@ pub fn testnet_genesis(
 		},
 		parachain_info: ParachainInfoConfig {
 			parachain_id: para_id,
+			..Default::default()
 		},
-		ethereum_chain_id: EthereumChainIdConfig { chain_id },
+		ethereum_chain_id: EthereumChainIdConfig {
+			chain_id,
+			..Default::default()
+		},
 		evm: EVMConfig {
 			// We need _some_ code inserted at the precompile address so that
 			// the evm will actually call the address.
@@ -287,9 +256,11 @@ pub fn testnet_genesis(
 					)
 				})
 				.collect(),
+			..Default::default()
 		},
-		ethereum: EthereumConfig {},
-		democracy: DemocracyConfig::default(),
+		ethereum: EthereumConfig {
+			..Default::default()
+		},
 		parachain_staking: ParachainStakingConfig {
 			candidates: candidates
 				.iter()
@@ -303,14 +274,6 @@ pub fn testnet_genesis(
 			blocks_per_round: BLOCKS_PER_ROUND,
 			num_selected_candidates: NUM_SELECTED_CANDIDATES,
 		},
-		council_collective: CouncilCollectiveConfig {
-			phantom: Default::default(),
-			members: council_members,
-		},
-		tech_committee_collective: TechCommitteeCollectiveConfig {
-			phantom: Default::default(),
-			members: tech_comittee_members,
-		},
 		treasury_council_collective: TreasuryCouncilCollectiveConfig {
 			phantom: Default::default(),
 			members: treasury_council_members,
@@ -321,6 +284,7 @@ pub fn testnet_genesis(
 		},
 		author_filter: AuthorFilterConfig {
 			eligible_count: EligibilityValue::new_unchecked(50),
+			..Default::default()
 		},
 		author_mapping: AuthorMappingConfig {
 			mappings: candidates
@@ -334,13 +298,24 @@ pub fn testnet_genesis(
 		migrations: Default::default(),
 		maintenance_mode: MaintenanceModeConfig {
 			start_in_maintenance_mode: false,
+			..Default::default()
 		},
 		// This should initialize it to whatever we have set in the pallet
 		polkadot_xcm: PolkadotXcmConfig::default(),
 		transaction_payment: TransactionPaymentConfig {
 			multiplier: Multiplier::from(8u128),
+			..Default::default()
 		},
-	}
+		moonbeam_orbiters: MoonbeamOrbitersConfig {
+			min_orbiter_deposit: One::one(),
+		},
+		xcm_transactor: XcmTransactorConfig {
+			relay_indices: moonbeam_relay_encoder::westend::WESTEND_RELAY_INDICES,
+			..Default::default()
+		},
+	};
+
+	serde_json::to_value(&config).expect("Could not build genesis config.")
 }
 
 #[cfg(test)]

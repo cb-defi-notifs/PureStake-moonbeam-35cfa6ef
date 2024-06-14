@@ -15,12 +15,12 @@
 // along with Moonbeam.  If not, see <http://www.gnu.org/licenses/>.
 
 use crate::{
-	asset_config::{ForeignAssetInstance, LocalAssetInstance},
-	xcm_config::XcmExecutorConfig,
-	CouncilInstance, OpenTechCommitteeInstance, TechCommitteeInstance, TreasuryCouncilInstance,
+	asset_config::ForeignAssetInstance, xcm_config::XcmExecutorConfig, OpenTechCommitteeInstance,
+	TreasuryCouncilInstance,
 };
+use crate::{AssetId, H160};
 use frame_support::parameter_types;
-use moonbeam_relay_encoder::polkadot::PolkadotEncoder;
+use moonkit_xcm_primitives::AccountIdAssetIdConversion;
 use pallet_evm_precompile_author_mapping::AuthorMappingPrecompile;
 use pallet_evm_precompile_balances_erc20::{Erc20BalancesPrecompile, Erc20Metadata};
 use pallet_evm_precompile_batch::BatchPrecompile;
@@ -30,8 +30,8 @@ use pallet_evm_precompile_call_permit::CallPermitPrecompile;
 use pallet_evm_precompile_collective::CollectivePrecompile;
 use pallet_evm_precompile_conviction_voting::ConvictionVotingPrecompile;
 use pallet_evm_precompile_crowdloan_rewards::CrowdloanRewardsPrecompile;
-use pallet_evm_precompile_democracy::DemocracyPrecompile;
 use pallet_evm_precompile_gmp::GmpPrecompile;
+use pallet_evm_precompile_identity::IdentityPrecompile;
 use pallet_evm_precompile_modexp::Modexp;
 use pallet_evm_precompile_parachain_staking::ParachainStakingPrecompile;
 use pallet_evm_precompile_preimage::PreimagePrecompile;
@@ -40,15 +40,17 @@ use pallet_evm_precompile_randomness::RandomnessPrecompile;
 use pallet_evm_precompile_referenda::ReferendaPrecompile;
 use pallet_evm_precompile_registry::PrecompileRegistry;
 use pallet_evm_precompile_relay_encoder::RelayEncoderPrecompile;
+use pallet_evm_precompile_relay_verifier::RelayDataVerifierPrecompile;
 use pallet_evm_precompile_sha3fips::Sha3FIPS256;
 use pallet_evm_precompile_simple::{ECRecover, ECRecoverPublicKey, Identity, Ripemd160, Sha256};
 use pallet_evm_precompile_xcm_transactor::{
-	v1::XcmTransactorPrecompileV1, v2::XcmTransactorPrecompileV2,
+	v1::XcmTransactorPrecompileV1, v2::XcmTransactorPrecompileV2, v3::XcmTransactorPrecompileV3,
 };
 use pallet_evm_precompile_xcm_utils::XcmUtilsPrecompile;
 use pallet_evm_precompile_xtokens::XtokensPrecompile;
-use pallet_evm_precompileset_assets_erc20::{Erc20AssetsPrecompileSet, IsForeign, IsLocal};
+use pallet_evm_precompileset_assets_erc20::Erc20AssetsPrecompileSet;
 use precompile_utils::precompile_set::*;
+use sp_std::prelude::*;
 
 pub struct NativeErc20Metadata;
 
@@ -123,11 +125,7 @@ type MoonbeamPrecompilesAt<R> = (
 		Erc20BalancesPrecompile<R, NativeErc20Metadata>,
 		(CallableByContract, CallableByPrecompile),
 	>,
-	PrecompileAt<
-		AddressU64<2051>,
-		DemocracyPrecompile<R>,
-		(CallableByContract, CallableByPrecompile),
-	>,
+	RemovedPrecompileAt<AddressU64<2051>>, // Democracy
 	PrecompileAt<
 		AddressU64<2052>,
 		XtokensPrecompile<R>,
@@ -139,7 +137,7 @@ type MoonbeamPrecompilesAt<R> = (
 	>,
 	PrecompileAt<
 		AddressU64<2053>,
-		RelayEncoderPrecompile<R, PolkadotEncoder>,
+		RelayEncoderPrecompile<R>,
 		(CallableByContract, CallableByPrecompile),
 	>,
 	PrecompileAt<
@@ -193,16 +191,8 @@ type MoonbeamPrecompilesAt<R> = (
 		XcmTransactorPrecompileV2<R>,
 		(CallableByContract, CallableByPrecompile),
 	>,
-	PrecompileAt<
-		AddressU64<2062>,
-		CollectivePrecompile<R, CouncilInstance>,
-		(CallableByContract, CallableByPrecompile),
-	>,
-	PrecompileAt<
-		AddressU64<2063>,
-		CollectivePrecompile<R, TechCommitteeInstance>,
-		(CallableByContract, CallableByPrecompile),
-	>,
+	RemovedPrecompileAt<AddressU64<2062>>, //CouncilInstance
+	RemovedPrecompileAt<AddressU64<2063>>, // TechCommitteeInstance
 	PrecompileAt<
 		AddressU64<2064>,
 		CollectivePrecompile<R, TreasuryCouncilInstance>,
@@ -234,7 +224,43 @@ type MoonbeamPrecompilesAt<R> = (
 		(CallableByContract, CallableByPrecompile),
 	>,
 	PrecompileAt<AddressU64<2070>, GmpPrecompile<R>, SubcallWithMaxNesting<0>>,
+	PrecompileAt<
+		AddressU64<2071>,
+		XcmTransactorPrecompileV3<R>,
+		(CallableByContract, CallableByPrecompile),
+	>,
+	PrecompileAt<
+		AddressU64<2072>,
+		IdentityPrecompile<R, crate::MaxAdditionalFields>,
+		(CallableByContract, CallableByPrecompile),
+	>,
+	PrecompileAt<
+		AddressU64<2073>,
+		RelayDataVerifierPrecompile<R>,
+		(CallableByContract, CallableByPrecompile),
+	>,
 );
+
+pub struct DisabledLocalAssets<Runtime>(sp_std::marker::PhantomData<Runtime>);
+
+impl<Runtime> sp_core::Get<Vec<H160>> for DisabledLocalAssets<Runtime>
+where
+	Runtime: frame_system::Config,
+	Runtime::AccountId: Into<H160>,
+	Runtime: AccountIdAssetIdConversion<Runtime::AccountId, AssetId>,
+{
+	fn get() -> Vec<H160> {
+		vec![
+			337110116006454532607322340792629567158u128,
+			278750993613512357835566279094880339619,
+			228256396637196286254896220398224702687,
+			270195117769614861929703564202131636628,
+		]
+		.iter()
+		.map(|id| Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, *id).into())
+		.collect()
+	}
+}
 
 /// The PrecompileSet installed in the Moonbeam runtime.
 /// We include the nine Istanbul precompiles
@@ -252,13 +278,9 @@ pub type MoonbeamPrecompiles<R> = PrecompileSetBuilder<
 		// Prefixed precompile sets (XC20)
 		PrecompileSetStartingWith<
 			ForeignAssetPrefix,
-			Erc20AssetsPrecompileSet<R, IsForeign, ForeignAssetInstance>,
+			Erc20AssetsPrecompileSet<R, ForeignAssetInstance>,
 			(CallableByContract, CallableByPrecompile),
 		>,
-		PrecompileSetStartingWith<
-			LocalAssetPrefix,
-			Erc20AssetsPrecompileSet<R, IsLocal, LocalAssetInstance>,
-			(CallableByContract, CallableByPrecompile),
-		>,
+		RemovedPrecompilesAt<DisabledLocalAssets<R>>,
 	),
 >;

@@ -16,36 +16,14 @@
 
 #![cfg(feature = "runtime-benchmarks")]
 
-use crate::{pallet::LocalAssetIdCreator, Call, Config, DepositBalanceOf, Pallet};
-use frame_benchmarking::{account, benchmarks, impl_benchmark_test_suite};
-use frame_support::traits::{Currency, Get};
+use crate::{Call, Config, Pallet};
+use frame_benchmarking::{benchmarks, impl_benchmark_test_suite};
 use frame_system::RawOrigin;
-use xcm::latest::prelude::*;
-
-///RLocal asset deposit amount
-fn min_candidate_stk<T: Config>() -> DepositBalanceOf<T> {
-	<<T as Config>::LocalAssetDeposit as Get<DepositBalanceOf<T>>>::get()
-}
-
-/// Create a funded user.
-/// Used for generating the necessary amount for local assets
-fn create_funded_user<T: Config>(
-	string: &'static str,
-	n: u32,
-	extra: DepositBalanceOf<T>,
-) -> (T::AccountId, DepositBalanceOf<T>) {
-	const SEED: u32 = 0;
-	let user = account(string, n, SEED);
-	let min_reserve_amount = min_candidate_stk::<T>();
-	let total = min_reserve_amount + extra;
-	T::Currency::make_free_balance_be(&user, total);
-	T::Currency::issue(total);
-	(user, total)
-}
+use xcm::v3::prelude::*;
 
 benchmarks! {
 	// This where clause allows us to create ForeignAssetTypes
-	where_clause { where T::ForeignAssetType: From<MultiLocation> }
+	where_clause { where T::ForeignAssetType: From<Location> }
 	register_foreign_asset {
 		// does not really matter what we register
 		let asset_type = T::ForeignAssetType::default();
@@ -62,7 +40,7 @@ benchmarks! {
 		// We make it dependent on the number of existing assets already
 		let x in 5..100;
 		for i in 0..x {
-			let asset_type:  T::ForeignAssetType = MultiLocation::new(
+			let asset_type: T::ForeignAssetType = Location::new(
 				0,
 				X1(GeneralIndex(i as u128))
 			).into();
@@ -101,7 +79,7 @@ benchmarks! {
 		// We make it dependent on the number of existing assets already
 		let x in 5..100;
 		for i in 0..x {
-			let asset_type:  T::ForeignAssetType = MultiLocation::new(0, X1(GeneralIndex(i as u128))).into();
+			let asset_type: T::ForeignAssetType = Location::new(0, X1(GeneralIndex(i as u128))).into();
 			let metadata = T::AssetRegistrarMetadata::default();
 			let amount = 1u32.into();
 			Pallet::<T>::register_foreign_asset(
@@ -115,7 +93,7 @@ benchmarks! {
 		}
 
 		let new_asset_type = T::ForeignAssetType::default();
-		let asset_type_to_be_changed: T::ForeignAssetType = MultiLocation::new(
+		let asset_type_to_be_changed: T::ForeignAssetType = Location::new(
 			0,
 			X1(GeneralIndex((x-1) as u128))
 		).into();
@@ -131,7 +109,7 @@ benchmarks! {
 		// We make it dependent on the number of existing assets already
 		let x in 5..100;
 		for i in 0..x {
-			let asset_type:  T::ForeignAssetType = MultiLocation::new(0, X1(GeneralIndex(i as u128))).into();
+			let asset_type: T::ForeignAssetType = Location::new(0, X1(GeneralIndex(i as u128))).into();
 			let metadata = T::AssetRegistrarMetadata::default();
 			let amount = 1u32.into();
 			Pallet::<T>::register_foreign_asset(
@@ -143,7 +121,7 @@ benchmarks! {
 			)?;
 			Pallet::<T>::set_asset_units_per_second(RawOrigin::Root.into(), asset_type.clone(), 1, i)?;
 		}
-		let asset_type_to_be_removed: T::ForeignAssetType = MultiLocation::new(
+		let asset_type_to_be_removed: T::ForeignAssetType = Location::new(
 			0,
 			X1(GeneralIndex((x-1) as u128))
 		).into();
@@ -154,32 +132,12 @@ benchmarks! {
 		assert_eq!(Pallet::<T>::asset_type_units_per_second(asset_type_to_be_removed), None);
 	}
 
-	register_local_asset {
-		const USER_SEED: u32 = 1;
-		let (caller, deposit_amount) = create_funded_user::<T>("caller", USER_SEED, 0u32.into());
-		let asset_id = T::LocalAssetIdCreator::create_asset_id_from_metadata(0);
-		let owner: T::AccountId  = account("account id", 1u32, 0u32);
-		let current_local_counter: u128 =Pallet::<T>::local_asset_counter();
-		let min_balance: T::Balance = 1u32.into();
-
-	}: _(
-			RawOrigin::Root,
-			caller.clone(),
-			owner.clone(),
-			true,
-			min_balance.clone()
-	)
-	verify {
-		assert_eq!(Pallet::<T>::local_asset_counter(), current_local_counter+1);
-		assert!(Pallet::<T>::local_asset_deposit(asset_id).is_some());
-
-	}
 	remove_existing_asset_type {
 		// We make it dependent on the number of existing assets already
 		// Worst case is we need to remove it from SupportedAAssetsFeePayment too
 		let x in 5..100;
 		for i in 0..x {
-			let asset_type:  T::ForeignAssetType = MultiLocation::new(0, X1(GeneralIndex(i as u128))).into();
+			let asset_type: T::ForeignAssetType = Location::new(0, X1(GeneralIndex(i as u128))).into();
 			let metadata = T::AssetRegistrarMetadata::default();
 			let amount = 1u32.into();
 			Pallet::<T>::register_foreign_asset(
@@ -192,7 +150,7 @@ benchmarks! {
 			Pallet::<T>::set_asset_units_per_second(RawOrigin::Root.into(), asset_type.clone(), 1, i)?;
 		}
 
-		let asset_type_to_be_removed: T::ForeignAssetType = MultiLocation::new(
+		let asset_type_to_be_removed: T::ForeignAssetType = Location::new(
 			0,
 			X1(GeneralIndex((x-1) as u128))
 		).into();
@@ -209,10 +167,11 @@ benchmarks! {
 mod tests {
 	use crate::mock::Test;
 	use sp_io::TestExternalities;
+	use sp_runtime::BuildStorage;
 
 	pub fn new_test_ext() -> TestExternalities {
-		let t = frame_system::GenesisConfig::default()
-			.build_storage::<Test>()
+		let t = frame_system::GenesisConfig::<Test>::default()
+			.build_storage()
 			.unwrap();
 		TestExternalities::new(t)
 	}

@@ -5,7 +5,7 @@ import { describeSuite, expect } from "@moonwall/cli";
 // We want to compare both to verify recent db data consistency and rpc impl across client versions.
 
 describeSuite({
-  id: "S800",
+  id: "S10",
   title: "Ethereum secondary DB should contains valid data",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
@@ -16,10 +16,10 @@ describeSuite({
       test: async function () {
         // As we are testing rpc-level functionality the height at which we access secondary db data
         // is irrelevant. We can just select some arbitrary block numbers to verify block hashes.
-        const latestBlockNumber = await context.ethers().provider.getBlockNumber();
+        const latestBlockNumber = await context.ethers().provider!.getBlockNumber();
         // We asume we only want to run the test if there is enough blocks.
         if (latestBlockNumber > 10000) {
-          let failedCheckpoints = [];
+          const failedCheckpoints = [];
 
           const checkPoint_1 = latestBlockNumber - 10;
           const checkPoint_2 = latestBlockNumber - 100;
@@ -35,8 +35,8 @@ describeSuite({
           ];
 
           for (const block of blocks) {
-            const byNumber = await context.ethers().provider.getBlock(block);
-            const byHash = await context.ethers().provider.getBlock(byNumber.hash);
+            const byNumber = await context.ethers().provider!.getBlock(block);
+            const byHash = await context.ethers().provider!.getBlock(byNumber!.hash!);
             if (JSON.stringify(byNumber) !== JSON.stringify(byHash)) {
               failedCheckpoints.push(block);
             }

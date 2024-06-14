@@ -20,13 +20,17 @@ use crate::{
 	pallet, AwardedPts, Config, Event as ParachainStakingEvent, InflationInfo, Points, Range,
 	COLLATOR_LOCK_ID, DELEGATOR_LOCK_ID,
 };
+use block_author::BlockAuthor as BlockAuthorMap;
 use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{Everything, GenesisBuild, LockIdentifier, OnFinalize, OnInitialize},
+	traits::{Everything, Get, LockIdentifier, OnFinalize, OnInitialize},
 	weights::{constants::RocksDbWeight, Weight},
 };
+use frame_system::pallet_prelude::BlockNumberFor;
+use sp_consensus_slots::Slot;
 use sp_core::H256;
 use sp_io;
+use sp_runtime::BuildStorage;
 use sp_runtime::{
 	traits::{BlakeTwo256, IdentityLookup},
 	Perbill, Percent,
@@ -34,22 +38,18 @@ use sp_runtime::{
 
 pub type AccountId = u64;
 pub type Balance = u128;
-pub type BlockNumber = u32;
+pub type BlockNumber = BlockNumberFor<Test>;
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
-type Block = frame_system::mocking::MockBlock<Test>;
+type Block = frame_system::mocking::MockBlockU32<Test>;
 
 // Configure a mock runtime to test the pallet.
 construct_runtime!(
-	pub enum Test where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
+	pub enum Test
 	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		ParachainStaking: pallet_parachain_staking::{Pallet, Call, Storage, Config<T>, Event<T>},
-		BlockAuthor: block_author::{Pallet, Storage},
+		System: frame_system,
+		Balances: pallet_balances,
+		ParachainStaking: pallet_parachain_staking,
+		BlockAuthor: block_author,
 	}
 );
 
@@ -64,14 +64,14 @@ impl frame_system::Config for Test {
 	type BaseCallFilter = Everything;
 	type DbWeight = RocksDbWeight;
 	type RuntimeOrigin = RuntimeOrigin;
-	type Index = u64;
-	type BlockNumber = BlockNumber;
+	type RuntimeTask = RuntimeTask;
+	type Nonce = u64;
+	type Block = Block;
 	type RuntimeCall = RuntimeCall;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = sp_runtime::generic::Header<BlockNumber, BlakeTwo256>;
 	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = BlockHashCount;
 	type Version = ();
@@ -87,7 +87,7 @@ impl frame_system::Config for Test {
 	type MaxConsumers = frame_support::traits::ConstU32<16>;
 }
 parameter_types! {
-	pub const ExistentialDeposit: u128 = 1;
+	pub const ExistentialDeposit: u128 = 0;
 }
 impl pallet_balances::Config for Test {
 	type MaxReserves = ();
@@ -99,14 +99,19 @@ impl pallet_balances::Config for Test {
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
 	type WeightInfo = ();
+	type RuntimeHoldReason = ();
+	type FreezeIdentifier = ();
+	type MaxFreezes = ();
+	type RuntimeFreezeReason = ();
 }
 impl block_author::Config for Test {}
-const GENESIS_BLOCKS_PER_ROUND: u32 = 5;
+const GENESIS_BLOCKS_PER_ROUND: BlockNumber = 5;
 const GENESIS_COLLATOR_COMMISSION: Perbill = Perbill::from_percent(20);
 const GENESIS_PARACHAIN_BOND_RESERVE_PERCENT: Percent = Percent::from_percent(30);
 const GENESIS_NUM_SELECTED_CANDIDATES: u32 = 5;
 parameter_types! {
 	pub const MinBlocksPerRound: u32 = 3;
+	pub const MaxOfflineRounds: u32 = 1;
 	pub const LeaveCandidatesDelay: u32 = 2;
 	pub const CandidateBondLessDelay: u32 = 2;
 	pub const LeaveDelegatorsDelay: u32 = 2;
@@ -118,14 +123,24 @@ parameter_types! {
 	pub const MaxBottomDelegationsPerCandidate: u32 = 4;
 	pub const MaxDelegationsPerDelegator: u32 = 4;
 	pub const MinCandidateStk: u128 = 10;
-	pub const MinDelegatorStk: u128 = 5;
 	pub const MinDelegation: u128 = 3;
+	pub const MaxCandidates: u32 = 200;
 }
+
+pub struct StakingRoundSlotProvider;
+impl Get<Slot> for StakingRoundSlotProvider {
+	fn get() -> Slot {
+		let block_number: u64 = System::block_number().into();
+		Slot::from(block_number)
+	}
+}
+
 impl Config for Test {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = Balances;
 	type MonetaryGovernanceOrigin = frame_system::EnsureRoot<AccountId>;
 	type MinBlocksPerRound = MinBlocksPerRound;
+	type MaxOfflineRounds = MaxOfflineRounds;
 	type LeaveCandidatesDelay = LeaveCandidatesDelay;
 	type CandidateBondLessDelay = CandidateBondLessDelay;
 	type LeaveDelegatorsDelay = LeaveDelegatorsDelay;
@@ -137,13 +152,17 @@ impl Config for Test {
 	type MaxBottomDelegationsPerCandidate = MaxBottomDelegationsPerCandidate;
 	type MaxDelegationsPerDelegator = MaxDelegationsPerDelegator;
 	type MinCandidateStk = MinCandidateStk;
-	type MinDelegatorStk = MinDelegatorStk;
 	type MinDelegation = MinDelegation;
 	type BlockAuthor = BlockAuthor;
 	type OnCollatorPayout = ();
 	type PayoutCollatorReward = ();
+	type OnInactiveCollator = ();
 	type OnNewRound = ();
+	type SlotProvider = StakingRoundSlotProvider;
 	type WeightInfo = ();
+	type MaxCandidates = MaxCandidates;
+	type SlotDuration = frame_support::traits::ConstU64<6_000>;
+	type BlockTime = frame_support::traits::ConstU64<6_000>;
 }
 
 pub(crate) struct ExtBuilder {
@@ -223,8 +242,8 @@ impl ExtBuilder {
 	}
 
 	pub(crate) fn build(self) -> sp_io::TestExternalities {
-		let mut t = frame_system::GenesisConfig::default()
-			.build_storage::<Test>()
+		let mut t = frame_system::GenesisConfig::<Test>::default()
+			.build_storage()
 			.expect("Frame system builds valid default genesis config");
 
 		pallet_balances::GenesisConfig::<Test> {
@@ -263,7 +282,7 @@ fn roll_one_block() -> BlockNumber {
 }
 
 /// Rolls to the desired block. Returns the number of blocks played.
-pub(crate) fn roll_to(n: BlockNumber) -> u32 {
+pub(crate) fn roll_to(n: BlockNumber) -> BlockNumber {
 	let mut num_blocks = 0;
 	let mut block = System::block_number();
 	while block < n {
@@ -509,6 +528,11 @@ macro_rules! assert_events_not_emitted_match {
 pub(crate) fn set_author(round: BlockNumber, acc: u64, pts: u32) {
 	<Points<Test>>::mutate(round, |p| *p += pts);
 	<AwardedPts<Test>>::mutate(round, acc, |p| *p += pts);
+}
+
+// Allows to change the block author (default is always 0)
+pub(crate) fn set_block_author(acc: u64) {
+	<BlockAuthorMap<Test>>::set(acc);
 }
 
 /// fn to query the lock amount

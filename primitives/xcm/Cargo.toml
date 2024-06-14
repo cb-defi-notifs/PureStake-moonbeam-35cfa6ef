@@ -5,7 +5,7 @@ edition = "2021"
 homepage = "https://moonbeam.network"
 license = "GPL-3.0-only"
 repository = { workspace = true }
-version = "0.1.0"
+version = "0.1.1"
 
 [package.metadata.docs.rs]
 targets = [ "x86_64-unknown-linux-gnu" ]
@@ -22,6 +22,7 @@ sha3 = { workspace = true }
 # Substrate
 frame-support = { workspace = true }
 frame-system = { workspace = true }
+pallet-staking = { workspace = true }
 parity-scale-codec = { workspace = true, features = [ "derive" ] }
 scale-info = { workspace = true, features = [ "derive" ] }
 sp-io = { workspace = true }
@@ -33,6 +34,7 @@ cumulus-primitives-core = { workspace = true }
 
 # Polkadot / XCM
 orml-traits = { workspace = true }
+polkadot-runtime-common = { workspace = true }
 xcm = { workspace = true }
 xcm-builder = { workspace = true }
 xcm-executor = { workspace = true }
@@ -45,6 +47,7 @@ default = [ "std" ]
 std = [
 	"cumulus-primitives-core/std",
 	"hex/std",
+	"pallet-staking/std",
 	"parity-scale-codec/std",
 	"serde/std",
 	"sha3/std",
@@ -53,5 +56,11 @@ std = [
 	"sp-std/std",
 	"xcm-builder/std",
 	"xcm/std",
+	"polkadot-runtime-common/std"
 ]
-runtime-benchmarks = [ "frame-benchmarking", "frame-benchmarking/runtime-benchmarks", "xcm-builder/runtime-benchmarks" ]
+runtime-benchmarks = [
+	"frame-benchmarking",
+	"frame-benchmarking/runtime-benchmarks",
+	"xcm-builder/runtime-benchmarks",
+	"polkadot-runtime-common/runtime-benchmarks"
+]

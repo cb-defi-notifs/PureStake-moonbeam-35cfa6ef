@@ -35,7 +35,6 @@ pub enum StakeCall {
 	#[codec(index = 0u16)]
 	// the index should match the position of the dispatchable in the target pallet
 	Bond(
-		<AccountIdLookup<AccountId32, ()> as StaticLookup>::Source,
 		#[codec(compact)] cumulus_primitives_core::relay_chain::Balance,
 		pallet_staking::RewardDestination<AccountId32>,
 	),
@@ -54,7 +53,7 @@ pub enum StakeCall {
 	#[codec(index = 7u16)]
 	SetPayee(pallet_staking::RewardDestination<AccountId32>),
 	#[codec(index = 8u16)]
-	SetController(<AccountIdLookup<AccountId32, ()> as StaticLookup>::Source),
+	SetController,
 	#[codec(index = 19u16)]
 	Rebond(#[codec(compact)] cumulus_primitives_core::relay_chain::Balance),
 }
@@ -72,14 +71,34 @@ pub enum HrmpCall {
 	CancelOpenChannel(HrmpChannelId, u32),
 }
 
+use pallet_xcm_transactor::relay_indices::*;
+pub const TEST_RELAY_INDICES: RelayChainIndices = RelayChainIndices {
+	staking: 1u8,
+	utility: 0u8,
+	hrmp: 2u8,
+	bond: 0u8,
+	bond_extra: 1u8,
+	unbond: 2u8,
+	withdraw_unbonded: 3u8,
+	validate: 4u8,
+	nominate: 5u8,
+	chill: 6u8,
+	set_payee: 7u8,
+	set_controller: 8u8,
+	rebond: 19u8,
+	as_derivative: 0u8,
+	init_open_channel: 0u8,
+	accept_open_channel: 1u8,
+	close_channel: 2u8,
+	cancel_open_request: 6u8,
+};
+
 pub struct TestEncoder;
 
 impl StakeEncodeCall for TestEncoder {
 	fn encode_call(call: AvailableStakeCalls) -> Vec<u8> {
 		match call {
-			AvailableStakeCalls::Bond(a, b, c) => {
-				RelayCall::Stake(StakeCall::Bond(a.into(), b, c)).encode()
-			}
+			AvailableStakeCalls::Bond(b, c) => RelayCall::Stake(StakeCall::Bond(b, c)).encode(),
 
 			AvailableStakeCalls::BondExtra(a) => RelayCall::Stake(StakeCall::BondExtra(a)).encode(),
 
@@ -97,8 +116,8 @@ impl StakeEncodeCall for TestEncoder {
 				RelayCall::Stake(StakeCall::SetPayee(a.into())).encode()
 			}
 
-			AvailableStakeCalls::SetController(a) => {
-				RelayCall::Stake(StakeCall::SetController(a.into())).encode()
+			AvailableStakeCalls::SetController => {
+				RelayCall::Stake(StakeCall::SetController).encode()
 			}
 
 			AvailableStakeCalls::Rebond(a) => {

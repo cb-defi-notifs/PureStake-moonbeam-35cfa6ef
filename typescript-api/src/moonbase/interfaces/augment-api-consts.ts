@@ -6,7 +6,7 @@
 import "@polkadot/api-base/types/consts";
 
 import type { ApiTypes, AugmentedConst } from "@polkadot/api-base/types";
-import type { Bytes, Option, Vec, bool, u128, u16, u32, u64, u8 } from "@polkadot/types-codec";
+import type { Bytes, Option, Vec, u128, u16, u32, u64, u8 } from "@polkadot/types-codec";
 import type { Codec, ITuple } from "@polkadot/types-codec/types";
 import type { Perbill, Permill } from "@polkadot/types/interfaces/runtime";
 import type {
@@ -17,19 +17,13 @@ import type {
   SpVersionRuntimeVersion,
   SpWeightsRuntimeDbWeight,
   SpWeightsWeightV2Weight,
-  XcmV3MultiLocation,
+  StagingXcmV4Location,
 } from "@polkadot/types/lookup";
 
 export type __AugmentedConst<ApiType extends ApiTypes> = AugmentedConst<ApiType>;
 
 declare module "@polkadot/api-base/types/consts" {
   interface AugmentedConsts<ApiType extends ApiTypes> {
-    assetManager: {
-      /** The basic amount of funds that must be reserved for a local asset. */
-      localAssetDeposit: u128 & AugmentedConst<ApiType>;
-      /** Generic const */
-      [key: string]: Codec;
-    };
     assets: {
       /** The amount of funds that must be reserved when creating a new approval. */
       approvalDeposit: u128 & AugmentedConst<ApiType>;
@@ -52,9 +46,26 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
+    asyncBacking: {
+      /** Purely informative, but used by mocking tools like chospticks to allow knowing how to mock blocks */
+      expectedBlockTime: u64 & AugmentedConst<ApiType>;
+      /** Generic const */
+      [key: string]: Codec;
+    };
     balances: {
-      /** The minimum amount required to keep an account open. */
+      /**
+       * The minimum amount required to keep an account open. MUST BE GREATER THAN ZERO!
+       *
+       * If you _really_ need it to be zero, you can enable the feature `insecure_zero_ed` for this
+       * pallet. However, you do so at your own risk: this will open up a major DoS vector. In case
+       * you have multiple sources of provider references, you may also get unexpected behaviour if
+       * you set this to zero.
+       *
+       * Bottom line: Do yourself a favour and make it at least one!
+       */
       existentialDeposit: u128 & AugmentedConst<ApiType>;
+      /** The maximum number of individual freeze locks that can exist on an account at any time. */
+      maxFreezes: u32 & AugmentedConst<ApiType>;
       /**
        * The maximum number of locks that should exist on an account. Not strictly enforced, but
        * used for weight estimation.
@@ -100,64 +111,11 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
-    democracy: {
-      /** Period in blocks where an external proposal may not be re-submitted after being vetoed. */
-      cooloffPeriod: u32 & AugmentedConst<ApiType>;
-      /**
-       * The period between a proposal being approved and enacted.
-       *
-       * It should generally be a little more than the unstake period to ensure that voting stakers
-       * have an opportunity to remove themselves from the system in the case where they are on the
-       * losing side of a vote.
-       */
-      enactmentPeriod: u32 & AugmentedConst<ApiType>;
-      /** Minimum voting period allowed for a fast-track referendum. */
-      fastTrackVotingPeriod: u32 & AugmentedConst<ApiType>;
-      /**
-       * Indicator for whether an emergency origin is even allowed to happen. Some chains may want
-       * to set this permanently to `false`, others may want to condition it on things such as an
-       * upgrade having happened recently.
-       */
-      instantAllowed: bool & AugmentedConst<ApiType>;
-      /** How often (in blocks) new public referenda are launched. */
-      launchPeriod: u32 & AugmentedConst<ApiType>;
-      /** The maximum number of items which can be blacklisted. */
-      maxBlacklisted: u32 & AugmentedConst<ApiType>;
-      /** The maximum number of deposits a public proposal may have at any time. */
-      maxDeposits: u32 & AugmentedConst<ApiType>;
-      /** The maximum number of public proposals that can exist at any time. */
-      maxProposals: u32 & AugmentedConst<ApiType>;
-      /**
-       * The maximum number of votes for an account.
-       *
-       * Also used to compute weight, an overly big value can lead to extrinsic with very big
-       * weight: see `delegate` for instance.
-       */
-      maxVotes: u32 & AugmentedConst<ApiType>;
-      /** The minimum amount to be used as a deposit for a public referendum proposal. */
-      minimumDeposit: u128 & AugmentedConst<ApiType>;
-      /**
-       * The minimum period of vote locking.
-       *
-       * It should be no shorter than enactment period to ensure that in the case of an approval,
-       * those successful voters are locked into the consequences that their votes entail.
-       */
-      voteLockingPeriod: u32 & AugmentedConst<ApiType>;
-      /** How often (in blocks) to check for new votes. */
-      votingPeriod: u32 & AugmentedConst<ApiType>;
-      /** Generic const */
-      [key: string]: Codec;
-    };
     identity: {
-      /** The amount held on deposit for a registered identity */
+      /** The amount held on deposit for a registered identity. */
       basicDeposit: u128 & AugmentedConst<ApiType>;
-      /** The amount held on deposit per additional field for a registered identity. */
-      fieldDeposit: u128 & AugmentedConst<ApiType>;
-      /**
-       * Maximum number of additional fields that may be stored in an ID. Needed to bound the I/O
-       * required to access an identity, but can be pretty high.
-       */
-      maxAdditionalFields: u32 & AugmentedConst<ApiType>;
+      /** The amount held on deposit per encoded byte for a registered identity. */
+      byteDeposit: u128 & AugmentedConst<ApiType>;
       /**
        * Maxmimum number of registrars allowed in the system. Needed to bound the complexity of,
        * e.g., updating judgements.
@@ -165,6 +123,12 @@ declare module "@polkadot/api-base/types/consts" {
       maxRegistrars: u32 & AugmentedConst<ApiType>;
       /** The maximum number of sub-accounts allowed per identified account. */
       maxSubAccounts: u32 & AugmentedConst<ApiType>;
+      /** The maximum length of a suffix. */
+      maxSuffixLength: u32 & AugmentedConst<ApiType>;
+      /** The maximum length of a username, including its suffix and any system-added delimiters. */
+      maxUsernameLength: u32 & AugmentedConst<ApiType>;
+      /** The number of blocks within which a username grant must be accepted. */
+      pendingUsernameExpiration: u32 & AugmentedConst<ApiType>;
       /**
        * The amount held on deposit for a registered subaccount. This should account for the fact
        * that one storage item's value will increase by the size of an account ID, and there will be
@@ -174,25 +138,29 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
-    localAssets: {
-      /** The amount of funds that must be reserved when creating a new approval. */
-      approvalDeposit: u128 & AugmentedConst<ApiType>;
-      /** The amount of funds that must be reserved for a non-provider asset account to be maintained. */
-      assetAccountDeposit: u128 & AugmentedConst<ApiType>;
-      /** The basic amount of funds that must be reserved for an asset. */
-      assetDeposit: u128 & AugmentedConst<ApiType>;
-      /** The basic amount of funds that must be reserved when adding metadata to your asset. */
-      metadataDepositBase: u128 & AugmentedConst<ApiType>;
-      /** The additional funds that must be reserved for the number of bytes you store in your metadata. */
-      metadataDepositPerByte: u128 & AugmentedConst<ApiType>;
+    messageQueue: {
       /**
-       * Max number of items to destroy per `destroy_accounts` and `destroy_approvals` call.
+       * The size of the page; this implies the maximum message size which can be sent.
        *
-       * Must be configured to result in a weight that makes each call fit in a block.
+       * A good value depends on the expected message sizes, their weights, the weight that is
+       * available for processing them and the maximal needed message size. The maximal message size
+       * is slightly lower than this as defined by [`MaxMessageLenOf`].
        */
-      removeItemsLimit: u32 & AugmentedConst<ApiType>;
-      /** The maximum length of a name or symbol stored on-chain. */
-      stringLimit: u32 & AugmentedConst<ApiType>;
+      heapSize: u32 & AugmentedConst<ApiType>;
+      /**
+       * The maximum number of stale pages (i.e. of overweight messages) allowed before culling can
+       * happen. Once there are more stale pages than this, then historical pages may be dropped,
+       * even if they contain unprocessed overweight messages.
+       */
+      maxStale: u32 & AugmentedConst<ApiType>;
+      /**
+       * The amount of weight (if any) which should be provided to the message queue for servicing
+       * enqueued items.
+       *
+       * This may be legitimately `None` in the case that you will call
+       * `ServiceQueues::service_queues` manually.
+       */
+      serviceWeight: Option<SpWeightsWeightV2Weight> & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
     };
@@ -230,7 +198,15 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
+    openTechCommitteeCollective: {
+      /** The maximum weight of a dispatch call that can be proposed and executed. */
+      maxProposalWeight: SpWeightsWeightV2Weight & AugmentedConst<ApiType>;
+      /** Generic const */
+      [key: string]: Codec;
+    };
     parachainStaking: {
+      /** Get the average time beetween 2 blocks in milliseconds */
+      blockTime: u64 & AugmentedConst<ApiType>;
       /** Number of rounds candidate requests to decrease self-bond must wait to be executable */
       candidateBondLessDelay: u32 & AugmentedConst<ApiType>;
       /** Number of rounds that delegation less requests must wait before executable */
@@ -241,8 +217,15 @@ declare module "@polkadot/api-base/types/consts" {
       leaveDelegatorsDelay: u32 & AugmentedConst<ApiType>;
       /** Maximum bottom delegations (not counted) per candidate */
       maxBottomDelegationsPerCandidate: u32 & AugmentedConst<ApiType>;
+      /** Maximum candidates */
+      maxCandidates: u32 & AugmentedConst<ApiType>;
       /** Maximum delegations per delegator */
       maxDelegationsPerDelegator: u32 & AugmentedConst<ApiType>;
+      /**
+       * If a collator doesn't produce any block on this number of rounds, it is notified as
+       * inactive. This value must be less than or equal to RewardPaymentDelay.
+       */
+      maxOfflineRounds: u32 & AugmentedConst<ApiType>;
       /** Maximum top delegations counted per candidate */
       maxTopDelegationsPerCandidate: u32 & AugmentedConst<ApiType>;
       /** Minimum number of blocks per round */
@@ -251,14 +234,14 @@ declare module "@polkadot/api-base/types/consts" {
       minCandidateStk: u128 & AugmentedConst<ApiType>;
       /** Minimum stake for any registered on-chain account to delegate */
       minDelegation: u128 & AugmentedConst<ApiType>;
-      /** Minimum stake for any registered on-chain account to be a delegator */
-      minDelegatorStk: u128 & AugmentedConst<ApiType>;
       /** Minimum number of selected candidates every round */
       minSelectedCandidates: u32 & AugmentedConst<ApiType>;
       /** Number of rounds that delegations remain bonded before revocation request is executable */
       revokeDelegationDelay: u32 & AugmentedConst<ApiType>;
       /** Number of rounds after which block authors are rewarded */
       rewardPaymentDelay: u32 & AugmentedConst<ApiType>;
+      /** Get the slot duration in milliseconds */
+      slotDuration: u64 & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
     };
@@ -341,10 +324,27 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
+    relayStorageRoots: {
+      /**
+       * Limit the number of relay storage roots that will be stored. This limit applies to the
+       * number of items, not to their age. Decreasing the value of `MaxStorageRoots` is a breaking
+       * change and needs a migration to clean the `RelayStorageRoots` mapping.
+       */
+      maxStorageRoots: u32 & AugmentedConst<ApiType>;
+      /** Generic const */
+      [key: string]: Codec;
+    };
     scheduler: {
       /** The maximum weight that may be scheduled per block for any dispatchables. */
       maximumWeight: SpWeightsWeightV2Weight & AugmentedConst<ApiType>;
-      /** The maximum number of scheduled calls in the queue for a single block. */
+      /**
+       * The maximum number of scheduled calls in the queue for a single block.
+       *
+       * NOTE:
+       *
+       * - Dependent pallets' benchmarks might require a higher limit for the setting. Set a higher
+       *   limit under `runtime-benchmarks` feature.
+       */
       maxScheduledPerBlock: u32 & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
@@ -372,10 +372,12 @@ declare module "@polkadot/api-base/types/consts" {
     };
     timestamp: {
       /**
-       * The minimum period between blocks. Beware that this is different to the _expected_ period
-       * that the block production apparatus provides. Your chosen consensus system will generally
-       * work with this to determine a sensible block time. e.g. For Aura, it will be double this
-       * period on default settings.
+       * The minimum period between blocks.
+       *
+       * Be aware that this is different to the _expected_ period that the block production
+       * apparatus provides. Your chosen consensus system will generally work with this to determine
+       * a sensible block time. For example, in the Aura pallet it will be double this period on
+       * default settings.
        */
       minimumPeriod: u64 & AugmentedConst<ApiType>;
       /** Generic const */
@@ -383,10 +385,10 @@ declare module "@polkadot/api-base/types/consts" {
     };
     transactionPayment: {
       /**
-       * A fee mulitplier for `Operational` extrinsics to compute "virtual tip" to boost their `priority`
+       * A fee multiplier for `Operational` extrinsics to compute "virtual tip" to boost their `priority`
        *
-       * This value is multipled by the `final_fee` to obtain a "virtual tip" that is later added to
-       * a tip component in regular `priority` calculations. It means that a `Normal` transaction
+       * This value is multiplied by the `final_fee` to obtain a "virtual tip" that is later added
+       * to a tip component in regular `priority` calculations. It means that a `Normal` transaction
        * can front-run a similarly-sized `Operational` extrinsic (with no tip), by including a tip
        * value greater than the virtual tip.
        *
@@ -418,6 +420,8 @@ declare module "@polkadot/api-base/types/consts" {
       maxApprovals: u32 & AugmentedConst<ApiType>;
       /** The treasury's pallet id, used for deriving its sovereign account ID. */
       palletId: FrameSupportPalletId & AugmentedConst<ApiType>;
+      /** The period during which an approved treasury spend has to be claimed. */
+      payoutPeriod: u32 & AugmentedConst<ApiType>;
       /**
        * Fraction of a proposal's value that should be bonded in order to place the proposal. An
        * accepted proposal gets these back. A rejected proposal does not.
@@ -432,9 +436,27 @@ declare module "@polkadot/api-base/types/consts" {
       /** Generic const */
       [key: string]: Codec;
     };
+    treasuryCouncilCollective: {
+      /** The maximum weight of a dispatch call that can be proposed and executed. */
+      maxProposalWeight: SpWeightsWeightV2Weight & AugmentedConst<ApiType>;
+      /** Generic const */
+      [key: string]: Codec;
+    };
     utility: {
       /** The limit on the number of batched calls. */
       batchedCallsLimit: u32 & AugmentedConst<ApiType>;
+      /** Generic const */
+      [key: string]: Codec;
+    };
+    xcmpQueue: {
+      /**
+       * The maximum number of inbound XCMP channels that can be suspended simultaneously.
+       *
+       * Any further channel suspensions will fail and messages may get dropped without further
+       * notice. Choosing a high value (1000) is okay; the trade-off that is described in
+       * [`InboundXcmpSuspended`] still applies at that scale.
+       */
+      maxInboundSuspended: u32 & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
     };
@@ -442,7 +464,7 @@ declare module "@polkadot/api-base/types/consts" {
       /** The actual weight for an XCM message is `T::BaseXcmWeight + T::Weigher::weight(&msg)`. */
       baseXcmWeight: SpWeightsWeightV2Weight & AugmentedConst<ApiType>;
       /** Self chain location. */
-      selfLocation: XcmV3MultiLocation & AugmentedConst<ApiType>;
+      selfLocation: StagingXcmV4Location & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
     };
@@ -454,7 +476,7 @@ declare module "@polkadot/api-base/types/consts" {
        */
       baseXcmWeight: SpWeightsWeightV2Weight & AugmentedConst<ApiType>;
       /** Self chain location. */
-      selfLocation: XcmV3MultiLocation & AugmentedConst<ApiType>;
+      selfLocation: StagingXcmV4Location & AugmentedConst<ApiType>;
       /** Generic const */
       [key: string]: Codec;
     };

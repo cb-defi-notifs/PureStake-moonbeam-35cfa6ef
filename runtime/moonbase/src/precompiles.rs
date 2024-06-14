@@ -15,12 +15,16 @@
 // along with Moonbeam.  If not, see <http://www.gnu.org/licenses/>.
 
 use crate::{
-	asset_config::{ForeignAssetInstance, LocalAssetInstance},
-	xcm_config::XcmExecutorConfig,
-	CouncilInstance, OpenTechCommitteeInstance, TechCommitteeInstance, TreasuryCouncilInstance,
+	asset_config::ForeignAssetInstance,
+	xcm_config::{AssetType, XcmExecutorConfig},
+	OpenTechCommitteeInstance, TreasuryCouncilInstance,
 };
+use crate::{AccountId, AssetId, AssetManager, Balances, Erc20XcmBridge, Runtime, H160};
 use frame_support::parameter_types;
-use moonbeam_relay_encoder::westend::WestendEncoder;
+use moonkit_xcm_primitives::{
+	location_matcher::{Erc20PalletMatcher, ForeignAssetMatcher, SingleAddressMatcher},
+	AccountIdAssetIdConversion,
+};
 use pallet_evm_precompile_author_mapping::AuthorMappingPrecompile;
 use pallet_evm_precompile_balances_erc20::{Erc20BalancesPrecompile, Erc20Metadata};
 use pallet_evm_precompile_batch::BatchPrecompile;
@@ -30,8 +34,8 @@ use pallet_evm_precompile_call_permit::CallPermitPrecompile;
 use pallet_evm_precompile_collective::CollectivePrecompile;
 use pallet_evm_precompile_conviction_voting::ConvictionVotingPrecompile;
 use pallet_evm_precompile_crowdloan_rewards::CrowdloanRewardsPrecompile;
-use pallet_evm_precompile_democracy::DemocracyPrecompile;
 use pallet_evm_precompile_gmp::GmpPrecompile;
+use pallet_evm_precompile_identity::IdentityPrecompile;
 use pallet_evm_precompile_modexp::Modexp;
 use pallet_evm_precompile_parachain_staking::ParachainStakingPrecompile;
 use pallet_evm_precompile_preimage::PreimagePrecompile;
@@ -40,15 +44,20 @@ use pallet_evm_precompile_randomness::RandomnessPrecompile;
 use pallet_evm_precompile_referenda::ReferendaPrecompile;
 use pallet_evm_precompile_registry::PrecompileRegistry;
 use pallet_evm_precompile_relay_encoder::RelayEncoderPrecompile;
+use pallet_evm_precompile_relay_verifier::RelayDataVerifierPrecompile;
 use pallet_evm_precompile_sha3fips::Sha3FIPS256;
 use pallet_evm_precompile_simple::{ECRecover, ECRecoverPublicKey, Identity, Ripemd160, Sha256};
+use pallet_evm_precompile_storage_cleaner::StorageCleanerPrecompile;
+use pallet_evm_precompile_xcm::PalletXcmPrecompile;
 use pallet_evm_precompile_xcm_transactor::{
-	v1::XcmTransactorPrecompileV1, v2::XcmTransactorPrecompileV2,
+	v1::XcmTransactorPrecompileV1, v2::XcmTransactorPrecompileV2, v3::XcmTransactorPrecompileV3,
 };
 use pallet_evm_precompile_xcm_utils::{AllExceptXcmExecute, XcmUtilsPrecompile};
 use pallet_evm_precompile_xtokens::XtokensPrecompile;
-use pallet_evm_precompileset_assets_erc20::{Erc20AssetsPrecompileSet, IsForeign, IsLocal};
+use pallet_evm_precompileset_assets_erc20::Erc20AssetsPrecompileSet;
 use precompile_utils::precompile_set::*;
+use sp_std::prelude::*;
+use xcm_primitives::AsAssetType;
 
 /// ERC20 metadata for the native token.
 pub struct NativeErc20Metadata;
@@ -83,12 +92,28 @@ pub const FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX: &[u8] = &[255u8; 4];
 /// to Erc20AssetsPrecompileSet being marked as local
 pub const LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX: &[u8] = &[255u8, 255u8, 255u8, 254u8];
 
+/// Const to identify ERC20_BALANCES_PRECOMPILE address
+pub const ERC20_BALANCES_PRECOMPILE: u64 = 2050;
+
 parameter_types! {
 	pub ForeignAssetPrefix: &'static [u8] = FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX;
 	pub LocalAssetPrefix: &'static [u8] = LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX;
 }
 
 type EthereumPrecompilesChecks = (AcceptDelegateCall, CallableByContract, CallableByPrecompile);
+
+// Pallet-xcm precompile types.
+// Type that converts AssetId into Location
+type AssetIdToLocationManager = AsAssetType<AssetId, AssetType, AssetManager>;
+
+// The pallet-balances address is identified by ERC20_BALANCES_PRECOMPILE const
+type SingleAddressMatch = SingleAddressMatcher<AccountId, ERC20_BALANCES_PRECOMPILE, Balances>;
+
+// Type that matches an AccountId with a foreign asset address (if any)
+type ForeignAssetMatch = ForeignAssetMatcher<AccountId, AssetId, Runtime, AssetIdToLocationManager>;
+
+// Erc20XcmBridge pallet is used to match ERC20s
+type Erc20Match = Erc20PalletMatcher<AccountId, Erc20XcmBridge>;
 
 #[precompile_utils::precompile_name_from_address]
 type MoonbasePrecompilesAt<R> = (
@@ -107,6 +132,7 @@ type MoonbasePrecompilesAt<R> = (
 	PrecompileAt<AddressU64<1024>, Sha3FIPS256, (CallableByContract, CallableByPrecompile)>,
 	RemovedPrecompileAt<AddressU64<1025>>, // Dispatch<R>
 	PrecompileAt<AddressU64<1026>, ECRecoverPublicKey, (CallableByContract, CallableByPrecompile)>,
+	PrecompileAt<AddressU64<1027>, StorageCleanerPrecompile<R>, CallableByPrecompile>,
 	// Moonbeam specific precompiles:
 	PrecompileAt<
 		AddressU64<2048>,
@@ -119,15 +145,11 @@ type MoonbasePrecompilesAt<R> = (
 		(CallableByContract, CallableByPrecompile),
 	>,
 	PrecompileAt<
-		AddressU64<2050>,
+		AddressU64<ERC20_BALANCES_PRECOMPILE>,
 		Erc20BalancesPrecompile<R, NativeErc20Metadata>,
 		(CallableByContract, CallableByPrecompile),
 	>,
-	PrecompileAt<
-		AddressU64<2051>,
-		DemocracyPrecompile<R>,
-		(CallableByContract, CallableByPrecompile),
-	>,
+	RemovedPrecompileAt<AddressU64<2051>>, // DemocracyPrecompile
 	PrecompileAt<
 		AddressU64<2052>,
 		XtokensPrecompile<R>,
@@ -139,7 +161,7 @@ type MoonbasePrecompilesAt<R> = (
 	>,
 	PrecompileAt<
 		AddressU64<2053>,
-		RelayEncoderPrecompile<R, WestendEncoder>,
+		RelayEncoderPrecompile<R>,
 		(CallableByContract, CallableByPrecompile),
 	>,
 	PrecompileAt<
@@ -191,16 +213,10 @@ type MoonbasePrecompilesAt<R> = (
 		XcmTransactorPrecompileV2<R>,
 		(CallableByContract, CallableByPrecompile),
 	>,
-	PrecompileAt<
-		AddressU64<2062>,
-		CollectivePrecompile<R, CouncilInstance>,
-		(CallableByContract, CallableByPrecompile),
-	>,
-	PrecompileAt<
-		AddressU64<2063>,
-		CollectivePrecompile<R, TechCommitteeInstance>,
-		(CallableByContract, CallableByPrecompile),
-	>,
+	// CouncilCollective precompile
+	RemovedPrecompileAt<AddressU64<2062>>,
+	// TechCommitteeCollective precompile
+	RemovedPrecompileAt<AddressU64<2063>>,
 	PrecompileAt<
 		AddressU64<2064>,
 		CollectivePrecompile<R, TreasuryCouncilInstance>,
@@ -232,7 +248,74 @@ type MoonbasePrecompilesAt<R> = (
 		(CallableByContract, CallableByPrecompile),
 	>,
 	PrecompileAt<AddressU64<2070>, GmpPrecompile<R>, SubcallWithMaxNesting<0>>,
+	PrecompileAt<
+		AddressU64<2071>,
+		XcmTransactorPrecompileV3<R>,
+		(CallableByContract, CallableByPrecompile),
+	>,
+	PrecompileAt<
+		AddressU64<2072>,
+		IdentityPrecompile<R, crate::MaxAdditionalFields>,
+		(CallableByContract, CallableByPrecompile),
+	>,
+	PrecompileAt<
+		AddressU64<2073>,
+		RelayDataVerifierPrecompile<R>,
+		(CallableByContract, CallableByPrecompile),
+	>,
+	PrecompileAt<
+		AddressU64<2074>,
+		PalletXcmPrecompile<R, (SingleAddressMatch, ForeignAssetMatch, Erc20Match)>,
+		(CallableByContract, CallableByPrecompile),
+	>,
 );
+
+pub struct DisabledLocalAssets<Runtime>(sp_std::marker::PhantomData<Runtime>);
+
+impl<Runtime> sp_core::Get<Vec<H160>> for DisabledLocalAssets<Runtime>
+where
+	Runtime: frame_system::Config,
+	Runtime::AccountId: Into<H160>,
+	Runtime: AccountIdAssetIdConversion<Runtime::AccountId, AssetId>,
+{
+	fn get() -> Vec<H160> {
+		vec![
+			// https://moonbase.subscan.io/extrinsic/5245322-6?event=5245322-22
+			182085191673801920759598290391359780050u128,
+			// https://moonbase.subscan.io/extrinsic/3244752-4?event=3244752-9
+			282223684955665977914983262584256755878u128,
+			// https://moonbase.subscan.io/extrinsic/3158280-4?event=3158280-9
+			235962050501460763853961856666389569138u128,
+			// https://moonbase.subscan.io/block/3045900?tab=event&&event=3045900-4
+			45350527686064227409532032051821627910u128,
+			// https://moonbase.subscan.io/extrinsic/3024306-4?event=3024306-9
+			199439015574556113723291251263369885338u128,
+			// https://moonbase.subscan.io/extrinsic/2921640-4?event=2921640-9
+			236426850287284823323011839750645103615u128,
+			// https://moonbase.subscan.io/extrinsic/2748867-4?event=2748867-9
+			14626673838203901761839010613793775004u128,
+			// https://moonbase.subscan.io/extrinsic/2709788-4?event=2709788-9
+			95328064580428769161981851380106820590u128,
+			// https://moonbase.subscan.io/extrinsic/2670844-4?event=2670844-9
+			339028723712074529056817184013808486301u128,
+			// https://moonbase.subscan.io/extrinsic/2555083-4?event=2555083-9
+			100481493116602214283160747599845770751u128,
+			// https://moonbase.subscan.io/extrinsic/2473880-3?event=2473880-8
+			319515966007349957795820176952936446433u128,
+			// https://moonbase.subscan.io/extrinsic/2346438-3?event=2346438-6
+			337110116006454532607322340792629567158u128,
+			// https://moonbase.subscan.io/extrinsic/2239102-3?event=2239102-6
+			255225902946708983196362678630947296516u128,
+			// https://moonbase.subscan.io/extrinsic/2142964-4?event=2142964-12
+			3356866138193769031598374869367363824u128,
+			// https://moonbase.subscan.io/extrinsic/1967538-6?event=1967538-28
+			144992676743556815849525085098140609495u128,
+		]
+		.iter()
+		.map(|id| Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, *id).into())
+		.collect()
+	}
+}
 
 /// The PrecompileSet installed in the Moonbase runtime.
 /// We include the nine Istanbul precompiles
@@ -249,13 +332,9 @@ pub type MoonbasePrecompiles<R> = PrecompileSetBuilder<
 		// Prefixed precompile sets (XC20)
 		PrecompileSetStartingWith<
 			ForeignAssetPrefix,
-			Erc20AssetsPrecompileSet<R, IsForeign, ForeignAssetInstance>,
+			Erc20AssetsPrecompileSet<R, ForeignAssetInstance>,
 			(CallableByContract, CallableByPrecompile),
 		>,
-		PrecompileSetStartingWith<
-			LocalAssetPrefix,
-			Erc20AssetsPrecompileSet<R, IsLocal, LocalAssetInstance>,
-			(CallableByContract, CallableByPrecompile),
-		>,
+		RemovedPrecompilesAt<DisabledLocalAssets<R>>,
 	),
 >;

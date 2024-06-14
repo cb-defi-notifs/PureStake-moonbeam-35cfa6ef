@@ -19,6 +19,7 @@ on:
 
 env:
   NODE_OPTIONS: "--max-old-space-size=12288"
+  CARGO_TERM_COLOR: always
 
 jobs:
   ####### Check files and formatting #######
@@ -27,6 +28,7 @@ jobs:
     outputs:
       git_branch: ${{ steps.check-git-ref.outputs.git_branch }}
       git_ref: ${{ steps.check-git-ref.outputs.git_ref }}
+      test_s3_dir: ${{ steps.check-git-ref.outputs.test_s3_dir }}
       image_exists: ${{ steps.check-docker-image.outputs.image_exists }}
       sha: ${{ steps.get-sha.outputs.sha }}
       sha8: ${{ steps.get-sha.outputs.sha8 }}
@@ -45,21 +47,26 @@ jobs:
           if [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
             echo "git_branch=$(echo ${GITHUB_HEAD_REF})" >> $GITHUB_OUTPUT
             echo "git_ref=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+            echo "test_s3_dir=test-pulls/${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           elif [[ -n "${{ github.event.inputs.pull_request }}" ]]; then
             echo "git_branch=$(echo ${GITHUB_HEAD_REF})" >> $GITHUB_OUTPUT
+            echo "test_s3_dir=test-pulls/${{ github.event.inputs.pull_request }}" >> $GITHUB_OUTPUT
             echo "git_ref=refs/pull/${{ github.event.inputs.pull_request }}/head" >> $GITHUB_OUTPUT
           else
+            echo "test_s3_dir=test-branches/master" >> $GITHUB_OUTPUT
             echo "git_branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
             echo "git_ref=$GITHUB_REF" >> $GITHUB_OUTPUT
           fi
+          echo "repo.full_name: ${{ github.event.pull_request.head.repo.full_name }}"
+          echo "github.repository: ${{ github.repository }}"
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           ref: ${{ steps.check-git-ref.outputs.git_ref }}
       - name: Get Latest RT Release
         id: get-latest-rt
         run: |
-          LATEST_RUNTIME_RELEASE=$(curl -s https://api.github.com/repos/purestake/moonbeam/releases | jq -r '.[] | select(.name | test("runtime";"i")) | .tag_name' | head -n 1 | tr -d '[:blank:]') && [[ ! -z "${LATEST_RUNTIME_RELEASE}" ]]
+          LATEST_RUNTIME_RELEASE=$(curl -s https://api.github.com/repos/moonbeam-foundation/moonbeam/releases | jq -r '.[] | select(.name | test("runtime";"i")) | .tag_name' | head -n 1 | tr -d '[:blank:]') && [[ ! -z "${LATEST_RUNTIME_RELEASE}" ]]
           echo $LATEST_RUNTIME_RELEASE
           echo "latest_rt=$LATEST_RUNTIME_RELEASE" >> $GITHUB_OUTPUT
       - name: Get Sha
@@ -72,7 +79,7 @@ jobs:
           head -1 | sed 's/.*#//' |  cut -c1-8)" >> $GITHUB_OUTPUT
           echo "polkadot_ver=$(grep 'frame-system' Cargo.toml | sed -nE 's/.*moonbeam-polkadot-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1)" >> $GITHUB_OUTPUT
 
-          ENDPOINT="https://api.github.com/repos/PureStake/moonbeam/git/refs/tags/${{ steps.get-latest-rt.outputs.latest_rt }}"
+          ENDPOINT="https://api.github.com/repos/moonbeam-foundation/moonbeam/git/refs/tags/${{ steps.get-latest-rt.outputs.latest_rt }}"
           RESPONSE=$(curl -s -H "Accept: application/vnd.github.v3+json" $ENDPOINT)
           TYPE=$(echo $RESPONSE | jq -r '.object.type')
 
@@ -94,7 +101,7 @@ jobs:
         id: check-docker-image
         run: |
           TAG=sha-${{ steps.get-sha.outputs.sha8 }}
-          echo "image_exists=$(docker image inspect purestake/moonbeam:$TAG > /dev/null && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+          echo "image_exists=$(docker image inspect moonbeamfoundation/moonbeam:$TAG > /dev/null && echo "true" || echo "false")" >> $GITHUB_OUTPUT
       - name: Display variables
         run: |
           echo git_ref: ${{ steps.check-git-ref.outputs.git_ref }}
@@ -112,7 +119,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Find un-copyrighted files
@@ -130,7 +137,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - uses: gaurav-nelson/github-action-markdown-link-check@v1
@@ -144,7 +151,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Setup editorconfig checker
@@ -164,23 +171,47 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - uses: oven-sh/setup-bun@v1
         with:
-          node-version: 18.x
+          bun-version: latest
       - name: Check with Prettier
         run: |
-          npx prettier@2 --check --ignore-path .prettierignore '**/*.(yml|js|ts|json)' \
+          bun x prettier@2 --check --ignore-path .prettierignore '**/*.(yml|js|ts|json)' \
           || (git diff --quiet \
           || (echo 'Unable to show a diff because there are unstaged changes'; false) \
-          && (npx prettier@2 --ignore-path \
+          && (bun x prettier@2 --ignore-path \
               .prettierignore '**/*.(yml|js|ts|json)' -w --loglevel silent \
           && git --no-pager diff; git restore .) && false)
 
-          npx prettier@2 --check --ignore-path .prettierignore '**/*.(yml|js|ts|json)'
+          bun x prettier@2 --check --ignore-path .prettierignore '**/*.(yml|js|ts|json)'
+
+  check-eslint:
+    name: "Check with EsLint"
+    runs-on: ubuntu-latest
+    needs: ["set-tags"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.set-tags.outputs.git_ref }}
+      - name: Use pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8.6.12
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+          cache: "pnpm"
+          cache-dependency-path: test/pnpm-lock.yaml
+      - name: Run Eslint check
+        run: |
+          cd test
+          pnpm i
+          pnpm lint
 
   check-cargo-toml-format:
     name: "Check Cargo.toml files format"
@@ -189,7 +220,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       # With rustup's nice new toml format, we just need to run rustup show to install the toolchain
@@ -205,7 +236,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Setup Rust toolchain
@@ -219,7 +250,7 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       # With rustup's nice new toml format, we just need to run rustup show to install the toolchain
@@ -229,67 +260,6 @@ jobs:
       - name: Format code with rustfmt
         run: cargo fmt -- --check
 
-  ####### Preparing polkadot binary for parachain tests #######
-  ####### For non-official repo, the script will fail if a new version of
-  ####### polkadot needs to be pushed.
-  ####### This job must not be skipped (otherwise the ts-tests are not run)
-
-  prepare-polkadot:
-    runs-on: bare-metal
-    needs: ["set-tags"]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ needs.set-tags.outputs.git_ref }}
-      - name: Login to DockerHub
-        # We should make sure that external PRs can't login to docker,
-        # but the check to detect if a PR is "external" not work when
-        # this workflow is trigerred by a push.
-        if: |
-          github.event_name == 'push' ||
-          github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v2.2.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          registry: index.docker.io
-      - name: Check & build polkadot docker image
-        run: |
-          POLKADOT_REPO=${{ needs.set-tags.outputs.polkadot_repo }}
-          POLKADOT_COMMIT=${{ needs.set-tags.outputs.polkadot_commit }}
-          DOCKER_TAG="purestake/moonbase-relay-testnet:sha-$POLKADOT_COMMIT"
-
-          POLKADOT_EXISTS=$(docker image inspect $DOCKER_TAG > /dev/null && \
-            echo "true" || echo "false")
-          if [[ "$POLKADOT_EXISTS" == "false" ]]; then
-            # $POLKADOT_COMMIT and $POLKADOT_REPO is used to build the relay image
-            ./scripts/build-alphanet-relay-image.sh
-            docker push $DOCKER_TAG
-          fi
-      - name: Check & prepare para-test docker image
-        run: |
-          POLKADOT_REPO=${{ needs.set-tags.outputs.polkadot_repo }}
-          POLKADOT_COMMIT=${{ needs.set-tags.outputs.polkadot_commit }}
-          DOCKER_TAG="docker.io/purestake/polkadot-para-tests:sha-$POLKADOT_COMMIT"
-
-          POLKADOT_EXISTS=$(docker image inspect $DOCKER_TAG > /dev/null && \
-            echo "true" || echo "false")
-          if [[ "$POLKADOT_EXISTS" == "false" ]]; then
-            mkdir -p build
-            MOONBEAM_DOCKER_TAG="docker.io/purestake/moonbase-relay-testnet:sha-$POLKADOT_COMMIT"
-            # Clear the dummy container if it wasn't properly cleaned up
-            docker rm -f dummy 2> /dev/null | true
-            docker create --pull always -ti --name dummy $MOONBEAM_DOCKER_TAG bash
-            docker cp dummy:/usr/local/bin/polkadot build/polkadot
-            docker rm -f dummy
-            docker build . --pull --no-cache -f docker/polkadot-para-tests.Dockerfile \
-              --network=host \
-              --build-arg HOST_UID="$UID" \
-              -t $DOCKER_TAG
-            docker push $DOCKER_TAG
-          fi
-
   ####### Building and Testing binaries #######
 
   cargo-clippy:
@@ -298,11 +268,11 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
       - name: Setup Rust toolchain
         run: rustup show
       # Development branch clippy check
@@ -321,39 +291,20 @@ jobs:
     needs: ["set-tags"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Cargo build
         uses: ./.github/workflow-templates/cargo-build
       - name: Upload runtimes
-        uses: actions/upload-artifact@v3.1.2
+        uses: actions/upload-artifact@v4
         with:
           name: runtimes
           path: runtimes
       - name: Upload binary
-        uses: actions/upload-artifact@v3.1.2
+        uses: actions/upload-artifact@v4
         with:
           name: moonbeam
-          path: build
-
-  build-features:
-    runs-on:
-      labels: bare-metal
-    needs: ["set-tags"]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ needs.set-tags.outputs.git_ref }}
-      - name: Cargo build
-        uses: ./.github/workflow-templates/cargo-build
-        with:
-          features: "try-runtime,runtime-benchmarks"
-      - name: Upload binary
-        uses: actions/upload-artifact@v3.1.2
-        with:
-          name: moonbeam-features
           path: build
 
   rust-test:
@@ -366,11 +317,11 @@ jobs:
       SCCACHE_CACHE_SIZE: "100GB"
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.4
       - name: Setup Variables
         shell: bash
         run: |
@@ -379,7 +330,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p mold
-          curl -L --retry 10 --silent --show-error https://github.com/rui314/mold/releases/download/v1.1.1/mold-1.1.1-$(uname -m)-linux.tar.gz | tar -C $(realpath mold) --strip-components=1 -xzf -
+          curl -L --retry 10 --silent --show-error https://github.com/rui314/mold/releases/download/v2.30.0/mold-2.30.0-$(uname -m)-linux.tar.gz | tar -C $(realpath mold) --strip-components=1 -xzf -
       # With rustup's nice new toml format, we just need to run rustup show to install the toolchain
       # https://github.com/actions-rs/toolchain/issues/126#issuecomment-782989659
       - name: Setup Rust toolchain
@@ -388,66 +339,108 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           fi
           rustup show
+          rustup target add wasm32-unknown-unknown
       # Checks are run after uploading artifacts since they are modified by the tests
       - name: Unit tests
         run: |
-          cargo test --profile testnet --all --features=evm-tracing
+          cargo test --profile testnet --workspace --features=evm-tracing,runtime-benchmarks
       - name: Run sccache stat for check pre test
         run: ${SCCACHE_PATH} --show-stats
 
-  typescript-tests:
+  dev-test:
     runs-on:
       labels: bare-metal
-    needs: ["set-tags", "build", "prepare-polkadot"]
+    needs: ["set-tags", "build"]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        chain: ["moonbase", "moonbeam"]
     env:
-      BINARY_PATH: "../build/moonbeam"
+      GH_WORKFLOW_MATRIX_CHAIN: ${{ matrix.chain }}
+      DEBUG_COLORS: 1
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - uses: actions/download-artifact@v3.0.2
+      - run: |
+          mkdir -p target/release
+      - name: "Download branch built node"
+        uses: actions/download-artifact@v4
         with:
           name: moonbeam
-          path: build
-      - name: Typescript Tests (Dev Service)
-        uses: ./.github/workflow-templates/typescript-tests
+          path: target/release
+      - name: "Run Moonwall Dev Tests"
+        uses: ./.github/workflow-templates/dev-tests
         with:
-          moonbeam-binary: build/moonbeam
-          timeout: 30000
+          moonwall_environment: dev_${{ matrix.chain }}
+      - name: Upload HTML report to s3
+        if: ${{ !github.event.pull_request.head.repo.fork}}
+        uses: opslayertech/upload-s3-action@v1.0.0
+        id: S3
+        with:
+          aws_key_id: ${{ secrets.S3_COVERAGE_ID }}
+          aws_secret_access_key: ${{ secrets.S3_COVERAGE_KEY }}
+          aws_bucket: ${{ vars.S3_COVERAGE_BUCKET }}
+          destination_dir: "${{ needs.set-tags.outputs.test_s3_dir }}"
+          source_dir: "test/html"
+          acl: "none"
+      # - name: Upload to Moonscope
+      #   if: github.event.pull_request.head.repo.full_name == github.repository
+      #   run: |
+      #     curl --location 'https://api.moonscope.kaki.dev/insert' \
+      #     -X POST \
+      #     --header 'moonwallenv: dev_${{ matrix.chain }}' \
+      #     --header 'Authorization: Bearer ${{ secrets.MOONSCOPE_TOKEN }}' \
+      #     --header 'table: dev_reports' \
+      #     --header 'branch: ${{ needs.set-tags.outputs.git_branch }}' \
+      #     --header 'Content-Type: application/json' \
+      #     --max-time 30 \
+      #     -d@test/tmp/testResults.json || echo "Curl command failed but continuing"
 
   typescript-tracing-tests:
-    if: github.ref == 'refs/heads/master' || contains(github.event.pull_request.labels.*.name, 'A10-evmtracing')
+    if: >
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on:
       labels: bare-metal
     needs: ["set-tags", "build"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - uses: actions/download-artifact@v3.0.2
+      - uses: actions/download-artifact@v4
         with:
           name: moonbeam
           path: build
-      - name: Use Node.js 18.x
-        uses: actions/setup-node@v3
+      - name: Use pnpm
+        uses: pnpm/action-setup@v3
         with:
-          node-version: 18.x
+          version: 8.6.12
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+          cache: "pnpm"
+          cache-dependency-path: test/pnpm-lock.yaml
+      - run: |
+          mkdir -p target/release
+      - name: "Download branch built node"
+        uses: actions/download-artifact@v4
+        with:
+          name: moonbeam
+          path: target/release
       - name: Get tracing runtimes
         run: |
           ./scripts/build-last-tracing-runtime.sh ${{ needs.set-tags.outputs.git_branch }}
-          mkdir -p tests/moonbase-overrides/
-          mv build/wasm/moonbase-runtime-local-substitute-tracing.wasm tests/moonbase-overrides/
-      - name: Typescript tracing tests (against dev service)
-        env:
-          BINARY_PATH: ../build/moonbeam
-          ETHAPI_CMD: --ethapi=txpool,debug,trace
-          FORCE_WASM_EXECUTION: true
-          FORCE_COMPILED_WASM: true
-          WASM_RUNTIME_OVERRIDES: moonbase-overrides
+          mkdir -p test/moonbase-overrides/
+          mv build/wasm/moonbase-runtime-local-substitute-tracing.wasm test/moonbase-overrides/
+      - name: Preparing the repository
         run: |
           chmod uog+x build/moonbeam
+          chmod uog+x target/release/moonbeam
 
           ####  Preparing the repository
           cd moonbeam-types-bundle
@@ -457,52 +450,49 @@ jobs:
           ####  Preparing the typescript api
           cd ../typescript-api
           npm ci
-
-          cd ../tests
-          npm ci
-          #### Prepares and copies the typescript generated API to include in the tests
-          npm run setup-typescript-api
-
-          #### Compile typescript tests into javascript (more stable for Mocha)
-          #### This also better display typescript issues
-          npm run build
-
-          #### Run tracing tests with mocha
-          node_modules/.bin/mocha --exit --parallel -j 2 'build/tracing-tests/**/test-*.js'
+      - name: Running Tracing Tests
+        env:
+          DEBUG_COLOURS: "1"
+          NODE_OPTIONS: "--max-old-space-size=12288"
+        run: |
+          cd test
+          pnpm install
+          pnpm compile-solidity
+          pnpm moonwall test dev_moonbase_tracing
 
   docker-moonbeam:
     runs-on: ubuntu-latest
     needs: ["set-tags", "build"]
-    if: needs.set-tags.outputs.image_exists == false && github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ needs.set-tags.outputs.image_exists == 'false' && !github.event.pull_request.head.repo.fork }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - uses: actions/download-artifact@v3.0.2
+      - uses: actions/download-artifact@v4
         with:
           name: moonbeam
           path: build
       - name: Prepare
         id: prep
         run: |
-          DOCKER_IMAGE=purestake/moonbeam
+          DOCKER_IMAGE=moonbeamfoundation/moonbeam
           TAGS="${DOCKER_IMAGE}:sha-${{ needs.set-tags.outputs.sha8 }}"
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2.1.0
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2.5.0
+        uses: docker/setup-buildx-action@v3.2.0
         with:
           version: latest
           driver-opts: |
             image=moby/buildkit:master
       - name: Login to DockerHub
-        uses: docker/login-action@v2.2.0
+        uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.MBF_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.MBF_DOCKERHUB_PASSWORD }}
       - name: Build and push moonbeam
         id: docker_build
         uses: docker/build-push-action@v4
@@ -520,12 +510,24 @@ jobs:
             org.opencontainers.image.created=${{ steps.prep.outputs.created }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=${{ github.event.repository.license.spdx_id }}
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Tag it with purestake for 6 month
+        run: |
+          PURESTAKE_TAG=`echo "${{ steps.prep.outputs.tags }}" | sed 's/moonbeamfoundation/purestake/'`
+          docker pull ${{ steps.prep.outputs.tags }}
+          docker tag ${{ steps.prep.outputs.tags }} $PURESTAKE_TAG
+          docker push $PURESTAKE_TAG
 
   chopsticks-upgrade-test:
     runs-on:
       labels: bare-metal
     needs: ["set-tags", "build"]
     strategy:
+      fail-fast: false
       matrix:
         chain: ["moonbase", "moonriver", "moonbeam"]
     env:
@@ -533,33 +535,46 @@ jobs:
       DEBUG_COLORS: 1
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - uses: pnpm/action-setup@v2
+      - uses: pnpm/action-setup@v3
         with:
-          version: 7
-      - uses: actions/setup-node@v3
+          version: 8
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18.x
+          node-version: 20.10.0
           cache: "pnpm"
           cache-dependency-path: test/pnpm-lock.yaml
+      - name: Create local folders
+        run: |
+          mkdir -p target/release/wbuild/${{ matrix.chain }}-runtime/
+          mkdir -p test/tmp/node_logs
       - name: "Download runtime"
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: runtimes
-          path: test/runtimes
+          path: target/release/wbuild/${{ matrix.chain }}-runtime/
       - name: "Install and run upgrade test"
         run: |
           cd test
-          pnpm i
-          pnpm moonwall test CI_upgrade_RT_${{matrix.chain}}
+          pnpm install
+      - name: Run Upgrade Test (with retry)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 3
+          timeout_minutes: 2
+          retry_on: error
+          command: |
+            cd test
+            pnpm moonwall test upgrade_${{matrix.chain}}
 
   zombie_upgrade_test:
     runs-on:
       labels: bare-metal
     needs: ["set-tags", "build"]
     strategy:
+      fail-fast: false
       matrix:
         ## TODO: add moonriver here when it is ready
         chain: ["moonbase", "moonbeam"]
@@ -568,64 +583,58 @@ jobs:
       DEBUG_COLORS: 1
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.set-tags.outputs.git_ref }}
-      - uses: pnpm/action-setup@v2
+      - uses: pnpm/action-setup@v3
         with:
-          version: 7
-      - uses: actions/setup-node@v3
+          version: 8
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18.x
-          cache: "pnpm"
-          cache-dependency-path: test/pnpm-lock.yaml
+          node-version: 20.10.0
       - name: Create local folders
         run: |
           mkdir -p target/release/wbuild/${{ matrix.chain }}-runtime/
           mkdir -p test/tmp
       - name: "Download branch built runtime"
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: runtimes
           path: target/release/wbuild/${{ matrix.chain }}-runtime/
       - name: "Download branch built node"
-        uses: actions/download-artifact@v3.0.2
+        uses: actions/download-artifact@v4
         with:
           name: moonbeam
           path: target/release
-      - name: Retrieve polkadot binary from
-        run: |
-          POLKADOT_VERSION=${{ needs.set-tags.outputs.polkadot_ver }}
-          DOCKER_TAG="parity/polkadot:v${POLKADOT_VERSION}"
-
-          docker rm -f dummy 2> /dev/null | true
-          docker create -ti --name dummy $DOCKER_TAG bash
-          docker cp dummy:/usr/bin/polkadot test/tmp/polkadot
-          docker rm -f dummy
       - name: Retrieve moonbeam binary from docker (for plainSpec generation)
         run: |
           MOONBEAM_COMMIT=${{ needs.set-tags.outputs.latest_rt_sha8 }}
-          DOCKER_TAG="purestake/moonbeam:sha-$MOONBEAM_COMMIT"
+          DOCKER_TAG="moonbeamfoundation/moonbeam:sha-$MOONBEAM_COMMIT"
 
           docker rm -f moonbeam_container 2> /dev/null | true
           docker create --name moonbeam_container $DOCKER_TAG bash
           docker cp moonbeam_container:moonbeam/moonbeam test/tmp/moonbeam_rt
           docker rm -f moonbeam_container
-      - name: "Run zombie upgrade test"
+      - name: Prepare Chainspecs
         run: |
           cd test
-          pnpm i
+          pnpm install
 
           ## Generate old spec using latest published node, modify it, and generate raw spec
           chmod uog+x tmp/moonbeam_rt
-          tmp/moonbeam_rt build-spec --chain ${{ matrix.chain }}-local > tmp/${{ matrix.chain }}-plain-spec.json
-          pnpm ts-node --esm --swc scripts/modify-plain-specs.ts process tmp/${{ matrix.chain }}-plain-spec.json tmp/${{ matrix.chain }}-modified-spec.json 
-          tmp/moonbeam_rt build-spec --chain tmp/${{ matrix.chain }}-modified-spec.json --raw > tmp/${{ matrix.chain }}-raw-spec.json
-
-          ## Start zombie network and run tests
           chmod uog+x ../target/release/moonbeam
-          chmod uog+x tmp/polkadot
+          tmp/moonbeam_rt build-spec --chain ${{ matrix.chain }}-local > tmp/${{ matrix.chain }}-plain-spec.json
+          pnpm tsx scripts/modify-plain-specs.ts process tmp/${{ matrix.chain }}-plain-spec.json tmp/${{ matrix.chain }}-modified-spec.json
+          tmp/moonbeam_rt build-spec --chain tmp/${{ matrix.chain }}-modified-spec.json --raw > tmp/${{ matrix.chain }}-raw-spec.json
+          pnpm tsx scripts/preapprove-rt-rawspec.ts process tmp/${{ matrix.chain }}-raw-spec.json tmp/${{ matrix.chain }}-modified-raw-spec.json ../target/release/wbuild/${{ matrix.chain }}-runtime/${{ matrix.chain }}_runtime.compact.compressed.wasm
+      - name: "Run zombie upgrade test"
+        run: |
+          cd test
           pnpm moonwall test zombie_${{ matrix.chain }}
+      - name: "Run zombie RPC test"
+        run: |
+          cd test
+          pnpm moonwall test zombie_${{ matrix.chain }}_rpc
       - name: Zip and Upload Node Logs on Failure
         if: failure()
         run: |
@@ -634,35 +643,8 @@ jobs:
           MOST_RECENT_ZOMBIE_DIR=$(ls -td /tmp/zombie-* | head -n 1)
           find $MOST_RECENT_ZOMBIE_DIR -maxdepth 1 -type f -name '*.log' -exec zip -r $NODE_LOGS_ZIP {} \;
           echo "NODE_LOGS_ZIP=${NODE_LOGS_ZIP}" >> $GITHUB_ENV
-      - uses: actions/upload-artifact@v3.1.2
+      - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: failed-node-logs
           path: ${{ env.NODE_LOGS_ZIP }}
-
-  dev-test:
-    runs-on:
-      labels: bare-metal
-    needs: ["set-tags", "build"]
-    strategy:
-      matrix:
-        chain: ["moonbase"]
-    env:
-      GH_WORKFLOW_MATRIX_CHAIN: ${{ matrix.chain }}
-      DEBUG_COLORS: 1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ needs.set-tags.outputs.git_ref }}
-      - run: |
-          mkdir -p target/release
-      - name: "Download branch built node"
-        uses: actions/download-artifact@v3.0.2
-        with:
-          name: moonbeam
-          path: target/release
-      - name: "Run Moonwall Dev Tests"
-        uses: ./.github/workflow-templates/dev-tests
-        with:
-          moonwall_environment: dev_${{ matrix.chain }}

@@ -6,7 +6,7 @@ version = "0.2.0"
 
 [dependencies]
 log = { version = "0.4", default-features = false }
-serde = { version = "1.0.124", optional = true }
+serde = { workspace = true }
 
 # Moonbeam
 xcm-primitives = { workspace = true }
@@ -33,11 +33,12 @@ xcm-executor = { workspace = true }
 frame-benchmarking = { workspace = true, optional = true }
 
 [dev-dependencies]
-pallet-balances = { workspace = true, features = [ "std" ] }
+pallet-balances = { workspace = true, features = [ "insecure_zero_ed", "std" ] }
 pallet-timestamp = { workspace = true, features = [ "std" ] }
 pallet-xcm = { workspace = true, features = [ "std" ] }
 parity-scale-codec = { workspace = true, features = [ "std" ] }
 sp-core = { workspace = true, features = [ "std" ] }
+sp-runtime = { workspace = true }
 
 [features]
 default = [ "std" ]
@@ -48,7 +49,6 @@ std = [
 	"frame-system/std",
 	"orml-traits/std",
 	"parity-scale-codec/std",
-	"serde",
 	"sp-io/std",
 	"sp-runtime/std",
 	"sp-std/std",
@@ -62,5 +62,7 @@ runtime-benchmarks = [
 	"frame-support/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"xcm-builder/runtime-benchmarks",
+	"pallet-xcm/runtime-benchmarks",
+	"xcm-primitives/runtime-benchmarks",
 ]
 try-runtime = [ "frame-support/try-runtime" ]

@@ -1,26 +1,24 @@
-import { BN } from "@polkadot/util";
-import { FrameSystemEventRecord } from "@polkadot/types/lookup";
-import "@polkadot/api-augment";
 import "@moonbeam-network/api-augment/moonbase";
-import { WEIGHT_PER_GAS, getBlockArray } from "@moonwall/util";
-import { describeSuite, beforeAll, expect } from "@moonwall/cli";
-import { checkTimeSliceForUpgrades, rateLimiter } from "../../helpers/common.js";
-import type { DispatchInfo } from "@polkadot/types/interfaces";
-import { ethers } from "ethers";
-import { GenericExtrinsic, u256 } from "@polkadot/types";
+import { beforeAll, describeSuite, expect } from "@moonwall/cli";
+import { WEIGHT_FEE, WEIGHT_PER_GAS, getBlockArray } from "@moonwall/util";
+import { ApiPromise } from "@polkadot/api";
+import { GenericExtrinsic } from "@polkadot/types";
+import type { u128 } from "@polkadot/types-codec";
 import {
-  FrameSupportDispatchPerDispatchClassWeight,
   EthereumBlock,
   EthereumReceiptReceiptV3,
   FpRpcTransactionStatus,
+  FrameSupportDispatchPerDispatchClassWeight,
+  FrameSystemEventRecord,
   SpWeightsWeightV2Weight,
 } from "@polkadot/types/lookup";
 import { AnyTuple } from "@polkadot/types/types";
-import type { u128 } from "@polkadot/types-codec";
-import { RUNTIME_CONSTANTS } from "../../../tests/util/constants.js"; // TODO: Remove on next mw ver
-import { TARGET_FILL_PERMILL, WEIGHT_FEE } from "@moonwall/util";
-import { BN_MILLION } from "@polkadot/util";
-import { ApiPromise } from "@polkadot/api";
+import { ethers } from "ethers";
+import { checkTimeSliceForUpgrades, rateLimiter, RUNTIME_CONSTANTS } from "../../helpers";
+import Debug from "debug";
+import { DispatchInfo } from "@polkadot/types/interfaces";
+const debug = Debug("smoke:dynamic-fees");
+
 const timePeriod = process.env.TIME_PERIOD ? Number(process.env.TIME_PERIOD) : 2 * 60 * 60 * 1000;
 const timeout = Math.floor(timePeriod / 12); // 2 hour -> 10 minute timeout
 const limiter = rateLimiter();
@@ -30,9 +28,10 @@ const atBlock = process.env.AT_BLOCK ? Number(process.env.AT_BLOCK) : -1;
 type BlockFilteredRecord = {
   blockNum: number;
   nextFeeMultiplier: u128;
+  fillPermill: bigint;
   ethBlock: EthereumBlock;
   extrinsics: GenericExtrinsic<AnyTuple>[];
-  ethersTransactionsFees: BigInt[];
+  ethersTransactionsFees: bigint[];
   baseFeePerGasInGwei: string;
   transactionStatuses: FpRpcTransactionStatus[];
   weights: FrameSupportDispatchPerDispatchClassWeight;
@@ -49,13 +48,17 @@ enum Change {
 }
 
 describeSuite({
-  id: "S550",
+  id: "S06",
   title: `Dynamic fees in past ${hours} hours should be correct`,
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let blockData: BlockFilteredRecord[];
+    // includes blockData and also the previous block, needed for fee change computation.
+    let allBlocks: BlockFilteredRecord[];
     let runtime: "MOONRIVER" | "MOONBEAM" | "MOONBASE";
     let paraApi: ApiPromise;
+    let skipAll = false;
+    let targetFillPermill: bigint;
 
     const checkMultiplier = (prevBlock: BlockFilteredRecord, curr: u128) => {
       if (!prevBlock) {
@@ -74,21 +77,21 @@ describeSuite({
       }
     };
 
-    const isChangeDirectionValid = (fillPermill: BN, change: Change, feeMultiplier: BN) => {
+    const isChangeDirectionValid = (fillPermill: bigint, change: Change, feeMultiplier: bigint) => {
       switch (true) {
-        case fillPermill.gt(new BN(TARGET_FILL_PERMILL)) && change == Change.Increased:
+        case fillPermill > targetFillPermill && change == Change.Increased:
           return true;
-        case fillPermill.gt(new BN(TARGET_FILL_PERMILL)) &&
+        case fillPermill > targetFillPermill &&
           change == Change.Unchanged &&
-          feeMultiplier.eq(new BN(RUNTIME_CONSTANTS[runtime].MAX_FEE_MULTIPLIER)):
+          feeMultiplier === RUNTIME_CONSTANTS[runtime].MAX_FEE_MULTIPLIER:
           return true;
-        case fillPermill.lt(new BN(TARGET_FILL_PERMILL)) && change == Change.Decreased:
+        case fillPermill < targetFillPermill && change == Change.Decreased:
           return true;
-        case fillPermill.lt(new BN(TARGET_FILL_PERMILL)) &&
+        case fillPermill < targetFillPermill &&
           change == Change.Unchanged &&
-          feeMultiplier.eq(new BN(RUNTIME_CONSTANTS[runtime].MIN_FEE_MULTIPLIER)):
+          feeMultiplier === RUNTIME_CONSTANTS[runtime].MIN_FEE_MULTIPLIER:
           return true;
-        case fillPermill.eq(new BN(TARGET_FILL_PERMILL)) && change == Change.Unchanged:
+        case fillPermill === targetFillPermill && change == Change.Unchanged:
           return true;
         case change == Change.Unknown:
           return true;
@@ -98,8 +101,18 @@ describeSuite({
     };
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
-      const { specVersion, specName } = paraApi.consts.system.version;
+      paraApi = context.polkadotJs("para");
+
+      const blockNumArray = atBlock > 0 ? [atBlock] : await getBlockArray(paraApi, timePeriod);
+      // Retrieves the block before the first block of the data. This is used later to compute
+      // the fee changes of the first block of the data.
+      const previousBlockNumber = Math.max(blockNumArray[0] - 1, 0);
+
+      // Retrieves version of the last block to check.
+      const endsAtBlockHash = await paraApi.rpc.chain.getBlockHash(
+        blockNumArray[blockNumArray.length - 1]
+      );
+      const { specVersion, specName } = (await paraApi.at(endsAtBlockHash)).consts.system.version;
       runtime = specName.toUpperCase() as any;
 
       if (
@@ -110,7 +123,7 @@ describeSuite({
           `Runtime ${specName.toString()} version ` +
             `${specVersion.toString()} is less than 2200, skipping test suite.`
         );
-        this.skip();
+        skipAll = true;
       }
 
       if (specVersion.toNumber() < 2300 && specName.toString() == "moonbeam") {
@@ -118,38 +131,52 @@ describeSuite({
           `Runtime ${specName.toString()} version ` +
             `${specVersion.toString()} is less than 2300, skipping test suite.`
         );
-        this.skip();
+        skipAll = true;
       }
 
-      const blockNumArray = atBlock > 0 ? [atBlock] : await getBlockArray(paraApi, timePeriod);
+      targetFillPermill = RUNTIME_CONSTANTS[runtime].TARGET_FILL_PERMILL.get(
+        specVersion.toNumber()
+      );
 
-      log(`Collecting ${hours} hours worth of block data`);
+      log(
+        `Collecting ${hours} hours worth of data ` +
+          `[from #${blockNumArray[0]} ` +
+          `to #${blockNumArray[blockNumArray.length - 1]}] ` +
+          `(${blockNumArray.length} blocks, RT${specVersion.toNumber()})`
+      );
 
       const getBlockData = async (blockNum: number) => {
         const blockHash = await paraApi.rpc.chain.getBlockHash(blockNum);
         const signedBlock = await paraApi.rpc.chain.getBlock(blockHash);
         const apiAt = await paraApi.at(blockHash);
         const ethBlock = (await apiAt.query.ethereum.currentBlock()).unwrapOrDefault();
-        const ethersBlock = await context.ethers().provider.getBlock(blockNum);
+        const ethersBlock = await context.ethers().provider!.getBlock(blockNum);
         const transactionStatuses = (
           await apiAt.query.ethereum.currentTransactionStatuses()
         ).unwrapOrDefault();
         const ethersTransactionsFees = await Promise.all(
-          ethersBlock.transactions.map(
-            async (hash) => (await context.ethers().provider.getTransactionReceipt(hash)).gasUsed
+          ethersBlock!.transactions.map(
+            async (hash) => (await context.ethers().provider!.getTransactionReceipt(hash))!.gasUsed
           )
         );
         const weights = await apiAt.query.system.blockWeight();
         const receipts = (await apiAt.query.ethereum.currentReceipts()).unwrapOr([]);
         const events = await apiAt.query.system.events();
+        const nextFeeMultiplier = await apiAt.query.transactionPayment.nextFeeMultiplier();
+        const fillPermill =
+          (weights.normal.refTime.unwrap().toBigInt() * 1_000_000n) /
+          apiAt.consts.system.blockWeights.perClass.normal.maxTotal.unwrap().refTime.toBigInt();
+        debug(`Block #${blockNum} fullness: ${(Number(fillPermill) / 10_000).toFixed(2)}%`);
+
         return {
-          blockNum: blockNum,
-          nextFeeMultiplier: await apiAt.query.transactionPayment.nextFeeMultiplier(),
+          blockNum,
+          nextFeeMultiplier,
+          fillPermill,
           ethBlock,
           ethersTransactionsFees,
           transactionStatuses,
           extrinsics: signedBlock.block.extrinsics,
-          baseFeePerGasInGwei: ethers.formatUnits(ethersBlock.baseFeePerGas, "gwei"),
+          baseFeePerGasInGwei: ethers.formatUnits(ethersBlock!.baseFeePerGas!, "gwei"),
           weights,
           receipts,
           events,
@@ -163,13 +190,20 @@ describeSuite({
         specVersion
       );
       if (result) {
-        log(`Time slice of blocks intersects with upgrade from RT ${onChainRt}, skipping tests.`);
-        this.skip();
+        log(
+          `Time slice of blocks intersects with upgrade ` +
+            `from RT ${onChainRt} to RT ${specVersion}, skipping tests.`
+        );
+        skipAll = true;
       }
 
       blockData = await Promise.all(
         blockNumArray.map((num) => limiter.schedule(() => getBlockData(num)))
       );
+      allBlocks =
+        previousBlockNumber > 0
+          ? [await getBlockData(previousBlockNumber), ...blockData]
+          : blockData;
     }, timeout);
 
     it({
@@ -177,15 +211,13 @@ describeSuite({
       title: "Block utilization by weight corresponds to fee multiplier",
       timeout: 30000,
       test: function () {
-        const maxWeights = paraApi.consts.system.blockWeights;
-        const enriched = blockData.map(({ weights, blockNum, nextFeeMultiplier }) => {
-          const fillPermill = weights.normal.refTime
-            .toBn()
-            .mul(new BN("1000000"))
-            .div(maxWeights.perClass.normal.maxTotal.unwrap().refTime.toBn());
-
+        if (skipAll) {
+          log("Skipping test suite due to runtime version");
+          return;
+        }
+        const enriched = blockData.map(({ blockNum, fillPermill, nextFeeMultiplier }) => {
           const change = checkMultiplier(
-            blockData.find((blockDatum) => blockDatum.blockNum == blockNum - 1),
+            allBlocks.find((blockDatum) => blockDatum.blockNum == blockNum - 1)!,
             nextFeeMultiplier
           );
 
@@ -193,14 +225,14 @@ describeSuite({
             blockNum,
             fillPermill,
             change,
-            valid: isChangeDirectionValid(fillPermill, change, nextFeeMultiplier),
+            valid: isChangeDirectionValid(fillPermill, change, nextFeeMultiplier.toBigInt()),
           };
         });
 
         const failures = enriched.filter(({ valid }) => !valid);
         failures.forEach(({ blockNum, fillPermill, change }) => {
           log(
-            `Block #${blockNum} is ${(fillPermill.toNumber() / 1_000_000).toFixed(
+            `Block #${blockNum} is ${(Number(fillPermill) / 10_000).toFixed(
               2
             )}% full with feeMultiplier ${change}`
           );
@@ -218,32 +250,23 @@ describeSuite({
       title: "Block utilization from normal class exts corresponds to fee multiplier",
       timeout: 30000,
       test: async function () {
-        const enriched = blockData.map(({ blockNum, nextFeeMultiplier, weights }) => {
-          const fillPermill = weights.normal.refTime
-            .unwrap()
-            .toBn()
-            .mul(BN_MILLION)
-            .div(
-              paraApi.consts.system.blockWeights.perClass.normal.maxTotal.unwrap().refTime.toBn()
-            );
-
+        if (skipAll) {
+          log("Skipping test suite due to runtime version");
+          return;
+        }
+        const enriched = blockData.map(({ blockNum, nextFeeMultiplier, fillPermill }) => {
           const change = checkMultiplier(
-            blockData.find((blockDatum) => blockDatum.blockNum == blockNum - 1),
+            allBlocks.find((blockDatum) => blockDatum.blockNum == blockNum - 1)!,
             nextFeeMultiplier
           );
-          const valid = isChangeDirectionValid(
-            new BN(fillPermill.toString()),
-            change,
-            nextFeeMultiplier
-          );
-
+          const valid = isChangeDirectionValid(fillPermill, change, nextFeeMultiplier.toBigInt());
           return { blockNum, fillPermill, change, valid };
         });
 
         const failures = enriched.filter(({ valid }) => !valid);
         failures.forEach(({ blockNum, fillPermill, change }) => {
           log(
-            `Block #${blockNum} is ${(fillPermill.toNumber() / 1_000_000).toFixed(
+            `Block #${blockNum} is ${(Number(fillPermill) / 10_000).toFixed(
               2
             )}% full with feeMultiplier ${change}`
           );
@@ -260,6 +283,10 @@ describeSuite({
       title: "BaseFeePerGas is within expected min/max",
       timeout: 30000,
       test: function () {
+        if (skipAll) {
+          log("Skipping test suite due to runtime version");
+          return;
+        }
         const failures = blockData.filter(({ baseFeePerGasInGwei }) => {
           return (
             ethers.parseUnits(baseFeePerGasInGwei, "gwei") <
@@ -284,6 +311,10 @@ describeSuite({
       title: "BaseFeePerGas is correctly calculated",
       timeout: 30000,
       test: function () {
+        if (skipAll) {
+          log("Skipping test suite due to runtime version");
+          return;
+        }
         const supplyFactor =
           paraApi.consts.system.version.specName.toString() === "moonbeam" ? 100n : 1n;
 
@@ -320,21 +351,26 @@ describeSuite({
       title: "Ext fee matches on chain",
       timeout: 30000,
       test: function () {
+        if (skipAll) {
+          log("Skipping test suite due to runtime version");
+          return;
+        }
+
         const extractGasAmount = (item: EthereumReceiptReceiptV3) => {
           switch (true) {
             case item.isEip1559:
-              return item.asEip1559.usedGas;
+              return item.asEip1559.usedGas.toBigInt();
             case item.isEip2930:
-              return item.asEip2930.usedGas;
+              return item.asEip2930.usedGas.toBigInt();
             case item.isLegacy:
-              return item.asLegacy.usedGas;
+              return item.asLegacy.usedGas.toBigInt();
             default:
               throw new Error("Update test to include new transaction type");
           }
         };
 
         const isEthereumTxn = (blockNum: number, index: number) => {
-          const extrinsic = blockData.find((blockDatum) => blockDatum.blockNum === blockNum)
+          const extrinsic = blockData.find((blockDatum) => blockDatum.blockNum === blockNum)!
             .extrinsics[index];
           return (
             extrinsic.method.section.toString() === "ethereum" &&
@@ -368,9 +404,12 @@ describeSuite({
                 return fee.refTime;
               });
 
-            const gasUsed: u256[] = filteredTxnEvents
+            const gasUsed = filteredTxnEvents
               .map((txnEvent) => {
-                if (isEthereumTxn(blockNum, txnEvent.phase.asApplyExtrinsic.toNumber())) {
+                if (
+                  txnEvent.phase.isApplyExtrinsic && // Exclude XCM => EVM calls
+                  isEthereumTxn(blockNum, txnEvent.phase.asApplyExtrinsic.toNumber())
+                ) {
                   const txnHash = (txnEvent.event.data as any).transactionHash;
                   const index = transactionStatuses.findIndex((status) =>
                     status.transactionHash.eq(txnHash)
@@ -379,9 +418,7 @@ describeSuite({
                   const gasUsed =
                     index === 0
                       ? extractGasAmount(receipts[index])
-                      : extractGasAmount(receipts[index]).sub(
-                          extractGasAmount(receipts[index - 1])
-                        );
+                      : extractGasAmount(receipts[index]) - extractGasAmount(receipts[index - 1]);
                   return gasUsed;
                 } else {
                   return [];
@@ -393,12 +430,10 @@ describeSuite({
               gasUsed.length
             );
 
-            const estimatedFees = gasUsed.map((amount) =>
-              amount.mul(new BN(WEIGHT_PER_GAS.toString()))
-            );
+            const estimatedFees = gasUsed.map((amount) => amount * WEIGHT_PER_GAS);
 
             const matchedAmounts = estimatedFees
-              .map((a, index) => a.eq(fees[index].toBn()).valueOf())
+              .map((a, index) => a === fees[index].toBigInt().valueOf())
               .reduce((curr, arr) => curr && arr, true);
 
             return { blockNum, fees, gasUsed, estimatedFees, matchedAmounts };

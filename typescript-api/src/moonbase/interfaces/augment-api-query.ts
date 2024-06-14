@@ -9,9 +9,11 @@ import type { ApiTypes, AugmentedQuery, QueryableStorageEntry } from "@polkadot/
 import type { Data } from "@polkadot/types";
 import type {
   BTreeMap,
+  BTreeSet,
   Bytes,
   Null,
   Option,
+  Struct,
   U256,
   U8aFixed,
   Vec,
@@ -31,26 +33,26 @@ import type {
   Percent,
 } from "@polkadot/types/interfaces/runtime";
 import type {
-  CumulusPalletDmpQueueConfigData,
-  CumulusPalletDmpQueuePageIndexData,
-  CumulusPalletParachainSystemCodeUpgradeAuthorization,
+  CumulusPalletDmpQueueMigrationState,
   CumulusPalletParachainSystemRelayStateSnapshotMessagingStateSnapshot,
-  CumulusPalletXcmpQueueInboundChannelDetails,
+  CumulusPalletParachainSystemUnincludedSegmentAncestor,
+  CumulusPalletParachainSystemUnincludedSegmentSegmentTracker,
   CumulusPalletXcmpQueueOutboundChannelDetails,
   CumulusPalletXcmpQueueQueueConfigData,
+  CumulusPrimitivesCoreAggregateMessageOrigin,
   EthereumBlock,
   EthereumReceiptReceiptV3,
   EthereumTransactionTransactionV2,
   FpRpcTransactionStatus,
   FrameSupportDispatchPerDispatchClassWeight,
-  FrameSupportPreimagesBounded,
   FrameSystemAccountInfo,
+  FrameSystemCodeUpgradeAuthorization,
   FrameSystemEventRecord,
   FrameSystemLastRuntimeUpgradeInfo,
   FrameSystemPhase,
+  MoonbaseRuntimeRuntimeHoldReason,
   MoonbaseRuntimeXcmConfigAssetType,
   NimbusPrimitivesNimbusCryptoPublic,
-  PalletAssetManagerAssetInfo,
   PalletAssetsApproval,
   PalletAssetsAssetAccount,
   PalletAssetsAssetDetails,
@@ -58,17 +60,18 @@ import type {
   PalletAuthorMappingRegistrationInfo,
   PalletBalancesAccountData,
   PalletBalancesBalanceLock,
+  PalletBalancesIdAmount,
   PalletBalancesReserveData,
   PalletCollectiveVotes,
   PalletConvictionVotingVoteVoting,
   PalletCrowdloanRewardsRewardInfo,
-  PalletDemocracyMetadataOwner,
-  PalletDemocracyReferendumInfo,
-  PalletDemocracyVoteThreshold,
-  PalletDemocracyVoteVoting,
+  PalletEmergencyParaXcmXcmMode,
   PalletEvmCodeMetadata,
+  PalletIdentityAuthorityProperties,
   PalletIdentityRegistrarInfo,
   PalletIdentityRegistration,
+  PalletMessageQueueBookState,
+  PalletMessageQueuePage,
   PalletMoonbeamOrbitersCollatorPoolInfo,
   PalletMultisigMultisig,
   PalletParachainStakingAutoCompoundAutoCompoundConfig,
@@ -82,7 +85,8 @@ import type {
   PalletParachainStakingInflationInflationInfo,
   PalletParachainStakingParachainBondConfig,
   PalletParachainStakingRoundInfo,
-  PalletParachainStakingSetOrderedSet,
+  PalletParachainStakingSetBoundedOrderedSet,
+  PalletPreimageOldRequestStatus,
   PalletPreimageRequestStatus,
   PalletProxyAnnouncement,
   PalletProxyProxyDefinition,
@@ -93,20 +97,23 @@ import type {
   PalletSchedulerScheduled,
   PalletTransactionPaymentReleases,
   PalletTreasuryProposal,
+  PalletTreasurySpendStatus,
   PalletXcmQueryStatus,
   PalletXcmRemoteLockedFungibleRecord,
+  PalletXcmTransactorRelayIndicesRelayChainIndices,
   PalletXcmTransactorRemoteTransactInfoWithMaxWeight,
   PalletXcmVersionMigrationStage,
   PolkadotCorePrimitivesOutboundHrmpMessage,
-  PolkadotPrimitivesV2AbridgedHostConfiguration,
-  PolkadotPrimitivesV2PersistedValidationData,
-  PolkadotPrimitivesV2UpgradeRestriction,
+  PolkadotPrimitivesV6AbridgedHostConfiguration,
+  PolkadotPrimitivesV6PersistedValidationData,
+  PolkadotPrimitivesV6UpgradeGoAhead,
+  PolkadotPrimitivesV6UpgradeRestriction,
   SpRuntimeDigest,
   SpTrieStorageProof,
   SpWeightsWeightV2Weight,
-  XcmV3MultiLocation,
+  StagingXcmV4Location,
   XcmVersionedAssetId,
-  XcmVersionedMultiLocation,
+  XcmVersionedLocation,
 } from "@polkadot/types/lookup";
 import type { Observable } from "@polkadot/types/types";
 
@@ -154,24 +161,6 @@ declare module "@polkadot/api-base/types/storage" {
         [MoonbaseRuntimeXcmConfigAssetType]
       > &
         QueryableStorageEntry<ApiType, [MoonbaseRuntimeXcmConfigAssetType]>;
-      /**
-       * Stores the counter of the number of local assets that have been created so far This value
-       * can be used to salt the creation of an assetId, e.g., by hashing it. This is particularly
-       * useful for cases like moonbeam where letting users choose their assetId would result in
-       * collision in the evm side.
-       */
-      localAssetCounter: AugmentedQuery<ApiType, () => Observable<u128>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /**
-       * Local asset deposits, a mapping from assetId to a struct holding the creator (from which
-       * the deposit was reserved) and the deposit amount
-       */
-      localAssetDeposit: AugmentedQuery<
-        ApiType,
-        (arg: u128 | AnyNumber | Uint8Array) => Observable<Option<PalletAssetManagerAssetInfo>>,
-        [u128]
-      > &
-        QueryableStorageEntry<ApiType, [u128]>;
       supportedFeePaymentAssets: AugmentedQuery<
         ApiType,
         () => Observable<Vec<MoonbaseRuntimeXcmConfigAssetType>>,
@@ -224,6 +213,17 @@ declare module "@polkadot/api-base/types/storage" {
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
+    asyncBacking: {
+      /**
+       * First tuple element is the highest slot that has been seen in the history of this chain.
+       * Second tuple element is the number of authored blocks so far. This is a strictly-increasing
+       * value if T::AllowMultipleBlocksPerSlot = false.
+       */
+      slotInfo: AugmentedQuery<ApiType, () => Observable<Option<ITuple<[u64, u32]>>>, []> &
+        QueryableStorageEntry<ApiType, []>;
+      /** Generic query */
+      [key: string]: QueryableStorageEntry<ApiType>;
+    };
     authorFilter: {
       /** The number of active authors that will be eligible at each height. */
       eligibleCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
@@ -237,11 +237,8 @@ declare module "@polkadot/api-base/types/storage" {
       /** Author of current block. */
       author: AugmentedQuery<ApiType, () => Observable<Option<AccountId20>>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /**
-       * The highest slot that has been seen in the history of this chain. This is a
-       * strictly-increasing value.
-       */
-      highestSlotSeen: AugmentedQuery<ApiType, () => Observable<u32>, []> &
+      /** Check if the inherent was included */
+      inherentIncluded: AugmentedQuery<ApiType, () => Observable<bool>, []> &
         QueryableStorageEntry<ApiType, []>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
@@ -301,6 +298,27 @@ declare module "@polkadot/api-base/types/storage" {
         [AccountId20]
       > &
         QueryableStorageEntry<ApiType, [AccountId20]>;
+      /** Freeze locks on account balances. */
+      freezes: AugmentedQuery<
+        ApiType,
+        (arg: AccountId20 | string | Uint8Array) => Observable<Vec<PalletBalancesIdAmount>>,
+        [AccountId20]
+      > &
+        QueryableStorageEntry<ApiType, [AccountId20]>;
+      /** Holds on account balances. */
+      holds: AugmentedQuery<
+        ApiType,
+        (arg: AccountId20 | string | Uint8Array) => Observable<
+          Vec<
+            {
+              readonly id: MoonbaseRuntimeRuntimeHoldReason;
+              readonly amount: u128;
+            } & Struct
+          >
+        >,
+        [AccountId20]
+      > &
+        QueryableStorageEntry<ApiType, [AccountId20]>;
       /** The total units of outstanding deactivated balance in the system. */
       inactiveIssuance: AugmentedQuery<ApiType, () => Observable<u128>, []> &
         QueryableStorageEntry<ApiType, []>;
@@ -355,36 +373,6 @@ declare module "@polkadot/api-base/types/storage" {
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
-    councilCollective: {
-      /** The current members of the collective. This is stored sorted (just by value). */
-      members: AugmentedQuery<ApiType, () => Observable<Vec<AccountId20>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** The prime member that helps determine the default vote behavior in case of absentations. */
-      prime: AugmentedQuery<ApiType, () => Observable<Option<AccountId20>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Proposals so far. */
-      proposalCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Actual proposal for a given hash, if it's current. */
-      proposalOf: AugmentedQuery<
-        ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<Option<Call>>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /** The hashes of the active proposals. */
-      proposals: AugmentedQuery<ApiType, () => Observable<Vec<H256>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Votes on a given proposal, if it is ongoing. */
-      voting: AugmentedQuery<
-        ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<Option<PalletCollectiveVotes>>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /** Generic query */
-      [key: string]: QueryableStorageEntry<ApiType>;
-    };
     crowdloanRewards: {
       accountsPayable: AugmentedQuery<
         ApiType,
@@ -428,147 +416,21 @@ declare module "@polkadot/api-base/types/storage" {
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
-    democracy: {
-      /**
-       * A record of who vetoed what. Maps proposal hash to a possible existent block number (until
-       * when it may not be resubmitted) and who vetoed it.
-       */
-      blacklist: AugmentedQuery<
+    dmpQueue: {
+      /** The migration state of this pallet. */
+      migrationStatus: AugmentedQuery<
         ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<Option<ITuple<[u32, Vec<AccountId20>]>>>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /** Record of all proposals that have been subject to emergency cancellation. */
-      cancellations: AugmentedQuery<
-        ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<bool>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /**
-       * Those who have locked a deposit.
-       *
-       * TWOX-NOTE: Safe, as increasing integer keys are safe.
-       */
-      depositOf: AugmentedQuery<
-        ApiType,
-        (arg: u32 | AnyNumber | Uint8Array) => Observable<Option<ITuple<[Vec<AccountId20>, u128]>>>,
-        [u32]
-      > &
-        QueryableStorageEntry<ApiType, [u32]>;
-      /** True if the last referendum tabled was submitted externally. False if it was a public proposal. */
-      lastTabledWasExternal: AugmentedQuery<ApiType, () => Observable<bool>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /**
-       * The lowest referendum index representing an unbaked referendum. Equal to `ReferendumCount`
-       * if there isn't a unbaked referendum.
-       */
-      lowestUnbaked: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /**
-       * General information concerning any proposal or referendum. The `PreimageHash` refers to the
-       * preimage of the `Preimages` provider which can be a JSON dump or IPFS hash of a JSON file.
-       *
-       * Consider a garbage collection for a metadata of finished referendums to `unrequest`
-       * (remove) large preimages.
-       */
-      metadataOf: AugmentedQuery<
-        ApiType,
-        (
-          arg:
-            | PalletDemocracyMetadataOwner
-            | { External: any }
-            | { Proposal: any }
-            | { Referendum: any }
-            | string
-            | Uint8Array
-        ) => Observable<Option<H256>>,
-        [PalletDemocracyMetadataOwner]
-      > &
-        QueryableStorageEntry<ApiType, [PalletDemocracyMetadataOwner]>;
-      /**
-       * The referendum to be tabled whenever it would be valid to table an external proposal. This
-       * happens when a referendum needs to be tabled and one of two conditions are met:
-       *
-       * - `LastTabledWasExternal` is `false`; or
-       * - `PublicProps` is empty.
-       */
-      nextExternal: AugmentedQuery<
-        ApiType,
-        () => Observable<
-          Option<ITuple<[FrameSupportPreimagesBounded, PalletDemocracyVoteThreshold]>>
-        >,
+        () => Observable<CumulusPalletDmpQueueMigrationState>,
         []
       > &
         QueryableStorageEntry<ApiType, []>;
-      /** The number of (public) proposals that have been made so far. */
-      publicPropCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** The public proposals. Unsorted. The second item is the proposal. */
-      publicProps: AugmentedQuery<
-        ApiType,
-        () => Observable<Vec<ITuple<[u32, FrameSupportPreimagesBounded, AccountId20]>>>,
-        []
-      > &
-        QueryableStorageEntry<ApiType, []>;
-      /** The next free referendum index, aka the number of referenda started so far. */
-      referendumCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /**
-       * Information concerning any given referendum.
-       *
-       * TWOX-NOTE: SAFE as indexes are not under an attacker’s control.
-       */
-      referendumInfoOf: AugmentedQuery<
-        ApiType,
-        (arg: u32 | AnyNumber | Uint8Array) => Observable<Option<PalletDemocracyReferendumInfo>>,
-        [u32]
-      > &
-        QueryableStorageEntry<ApiType, [u32]>;
-      /**
-       * All votes for a particular voter. We store the balance for the number of votes that we have
-       * recorded. The second item is the total amount of delegations, that will be added.
-       *
-       * TWOX-NOTE: SAFE as `AccountId`s are crypto hashes anyway.
-       */
-      votingOf: AugmentedQuery<
-        ApiType,
-        (arg: AccountId20 | string | Uint8Array) => Observable<PalletDemocracyVoteVoting>,
-        [AccountId20]
-      > &
-        QueryableStorageEntry<ApiType, [AccountId20]>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
-    dmpQueue: {
-      /** The configuration. */
-      configuration: AugmentedQuery<
-        ApiType,
-        () => Observable<CumulusPalletDmpQueueConfigData>,
-        []
-      > &
+    emergencyParaXcm: {
+      /** Whether incoming XCM is enabled or paused */
+      mode: AugmentedQuery<ApiType, () => Observable<PalletEmergencyParaXcmXcmMode>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /** Counter for the related counted storage map */
-      counterForOverweight: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** The overweight messages. */
-      overweight: AugmentedQuery<
-        ApiType,
-        (arg: u64 | AnyNumber | Uint8Array) => Observable<Option<ITuple<[u32, Bytes]>>>,
-        [u64]
-      > &
-        QueryableStorageEntry<ApiType, [u64]>;
-      /** The page index. */
-      pageIndex: AugmentedQuery<ApiType, () => Observable<CumulusPalletDmpQueuePageIndexData>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** The queue pages. */
-      pages: AugmentedQuery<
-        ApiType,
-        (arg: u32 | AnyNumber | Uint8Array) => Observable<Vec<ITuple<[u32, Bytes]>>>,
-        [u32]
-      > &
-        QueryableStorageEntry<ApiType, [u32]>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
@@ -613,6 +475,7 @@ declare module "@polkadot/api-base/types/storage" {
       [key: string]: QueryableStorageEntry<ApiType>;
     };
     ethereumChainId: {
+      /** The EVM chain ID. */
       chainId: AugmentedQuery<ApiType, () => Observable<u64>, []> &
         QueryableStorageEntry<ApiType, []>;
       /** Generic query */
@@ -647,21 +510,57 @@ declare module "@polkadot/api-base/types/storage" {
         [H160, H256]
       > &
         QueryableStorageEntry<ApiType, [H160, H256]>;
+      suicided: AugmentedQuery<
+        ApiType,
+        (arg: H160 | string | Uint8Array) => Observable<Option<Null>>,
+        [H160]
+      > &
+        QueryableStorageEntry<ApiType, [H160]>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
     identity: {
       /**
-       * Information that is pertinent to identify the entity behind an account.
+       * Reverse lookup from `username` to the `AccountId` that has registered it. The value should
+       * be a key in the `IdentityOf` map, but it may not if the user has cleared their identity.
+       *
+       * Multiple usernames may map to the same `AccountId`, but `IdentityOf` will only map to one
+       * primary username.
+       */
+      accountOfUsername: AugmentedQuery<
+        ApiType,
+        (arg: Bytes | string | Uint8Array) => Observable<Option<AccountId20>>,
+        [Bytes]
+      > &
+        QueryableStorageEntry<ApiType, [Bytes]>;
+      /**
+       * Information that is pertinent to identify the entity behind an account. First item is the
+       * registration, second is the account's primary username.
        *
        * TWOX-NOTE: OK ― `AccountId` is a secure hash.
        */
       identityOf: AugmentedQuery<
         ApiType,
-        (arg: AccountId20 | string | Uint8Array) => Observable<Option<PalletIdentityRegistration>>,
+        (
+          arg: AccountId20 | string | Uint8Array
+        ) => Observable<Option<ITuple<[PalletIdentityRegistration, Option<Bytes>]>>>,
         [AccountId20]
       > &
         QueryableStorageEntry<ApiType, [AccountId20]>;
+      /**
+       * Usernames that an authority has granted, but that the account controller has not confirmed
+       * that they want it. Used primarily in cases where the `AccountId` cannot provide a signature
+       * because they are a pure proxy, multisig, etc. In order to confirm it, they should call
+       * [`Call::accept_username`].
+       *
+       * First tuple item is the account and second is the acceptance deadline.
+       */
+      pendingUsernames: AugmentedQuery<
+        ApiType,
+        (arg: Bytes | string | Uint8Array) => Observable<Option<ITuple<[AccountId20, u32]>>>,
+        [Bytes]
+      > &
+        QueryableStorageEntry<ApiType, [Bytes]>;
       /**
        * The set of registrars. Not expected to get very big as can only be added through a special
        * origin (likely a council motion).
@@ -697,55 +596,63 @@ declare module "@polkadot/api-base/types/storage" {
         [AccountId20]
       > &
         QueryableStorageEntry<ApiType, [AccountId20]>;
-      /** Generic query */
-      [key: string]: QueryableStorageEntry<ApiType>;
-    };
-    localAssets: {
-      /** The holdings of a specific account for a specific asset. */
-      account: AugmentedQuery<
+      /** A map of the accounts who are authorized to grant usernames. */
+      usernameAuthorities: AugmentedQuery<
         ApiType,
         (
-          arg1: u128 | AnyNumber | Uint8Array,
-          arg2: AccountId20 | string | Uint8Array
-        ) => Observable<Option<PalletAssetsAssetAccount>>,
-        [u128, AccountId20]
+          arg: AccountId20 | string | Uint8Array
+        ) => Observable<Option<PalletIdentityAuthorityProperties>>,
+        [AccountId20]
       > &
-        QueryableStorageEntry<ApiType, [u128, AccountId20]>;
-      /**
-       * Approved balance transfers. First balance is the amount approved for transfer. Second is
-       * the amount of `T::Currency` reserved for storing this. First key is the asset ID, second
-       * key is the owner and third key is the delegate.
-       */
-      approvals: AugmentedQuery<
-        ApiType,
-        (
-          arg1: u128 | AnyNumber | Uint8Array,
-          arg2: AccountId20 | string | Uint8Array,
-          arg3: AccountId20 | string | Uint8Array
-        ) => Observable<Option<PalletAssetsApproval>>,
-        [u128, AccountId20, AccountId20]
-      > &
-        QueryableStorageEntry<ApiType, [u128, AccountId20, AccountId20]>;
-      /** Details of an asset. */
-      asset: AugmentedQuery<
-        ApiType,
-        (arg: u128 | AnyNumber | Uint8Array) => Observable<Option<PalletAssetsAssetDetails>>,
-        [u128]
-      > &
-        QueryableStorageEntry<ApiType, [u128]>;
-      /** Metadata of an asset. */
-      metadata: AugmentedQuery<
-        ApiType,
-        (arg: u128 | AnyNumber | Uint8Array) => Observable<PalletAssetsAssetMetadata>,
-        [u128]
-      > &
-        QueryableStorageEntry<ApiType, [u128]>;
+        QueryableStorageEntry<ApiType, [AccountId20]>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
     maintenanceMode: {
       /** Whether the site is in maintenance mode */
       maintenanceMode: AugmentedQuery<ApiType, () => Observable<bool>, []> &
+        QueryableStorageEntry<ApiType, []>;
+      /** Generic query */
+      [key: string]: QueryableStorageEntry<ApiType>;
+    };
+    messageQueue: {
+      /** The index of the first and last (non-empty) pages. */
+      bookStateFor: AugmentedQuery<
+        ApiType,
+        (
+          arg:
+            | CumulusPrimitivesCoreAggregateMessageOrigin
+            | { Here: any }
+            | { Parent: any }
+            | { Sibling: any }
+            | string
+            | Uint8Array
+        ) => Observable<PalletMessageQueueBookState>,
+        [CumulusPrimitivesCoreAggregateMessageOrigin]
+      > &
+        QueryableStorageEntry<ApiType, [CumulusPrimitivesCoreAggregateMessageOrigin]>;
+      /** The map of page indices to pages. */
+      pages: AugmentedQuery<
+        ApiType,
+        (
+          arg1:
+            | CumulusPrimitivesCoreAggregateMessageOrigin
+            | { Here: any }
+            | { Parent: any }
+            | { Sibling: any }
+            | string
+            | Uint8Array,
+          arg2: u32 | AnyNumber | Uint8Array
+        ) => Observable<Option<PalletMessageQueuePage>>,
+        [CumulusPrimitivesCoreAggregateMessageOrigin, u32]
+      > &
+        QueryableStorageEntry<ApiType, [CumulusPrimitivesCoreAggregateMessageOrigin, u32]>;
+      /** The origin at which we should begin servicing. */
+      serviceHead: AugmentedQuery<
+        ApiType,
+        () => Observable<Option<CumulusPrimitivesCoreAggregateMessageOrigin>>,
+        []
+      > &
         QueryableStorageEntry<ApiType, []>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
@@ -769,6 +676,16 @@ declare module "@polkadot/api-base/types/storage" {
        * execution of xcm messages must be paused.
        */
       shouldPauseXcm: AugmentedQuery<ApiType, () => Observable<bool>, []> &
+        QueryableStorageEntry<ApiType, []>;
+      /** Generic query */
+      [key: string]: QueryableStorageEntry<ApiType>;
+    };
+    moonbeamLazyMigrations: {
+      /** If true, it means that LocalAssets storage has been removed. */
+      localAssetsMigrationCompleted: AugmentedQuery<ApiType, () => Observable<bool>, []> &
+        QueryableStorageEntry<ApiType, []>;
+      /** The total number of suicided contracts that were removed */
+      suicidedContractsRemoved: AugmentedQuery<ApiType, () => Observable<u32>, []> &
         QueryableStorageEntry<ApiType, []>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
@@ -882,7 +799,7 @@ declare module "@polkadot/api-base/types/storage" {
         (
           arg1: u32 | AnyNumber | Uint8Array,
           arg2: AccountId20 | string | Uint8Array
-        ) => Observable<PalletParachainStakingCollatorSnapshot>,
+        ) => Observable<Option<PalletParachainStakingCollatorSnapshot>>,
         [u32, AccountId20]
       > &
         QueryableStorageEntry<ApiType, [u32, AccountId20]>;
@@ -960,6 +877,9 @@ declare module "@polkadot/api-base/types/storage" {
         [AccountId20]
       > &
         QueryableStorageEntry<ApiType, [AccountId20]>;
+      /** Killswitch to enable/disable marking offline feature. */
+      enableMarkingOffline: AugmentedQuery<ApiType, () => Observable<bool>, []> &
+        QueryableStorageEntry<ApiType, []>;
       /** Inflation configuration */
       inflationConfig: AugmentedQuery<
         ApiType,
@@ -987,13 +907,6 @@ declare module "@polkadot/api-base/types/storage" {
       /** The collator candidates selected for the current round */
       selectedCandidates: AugmentedQuery<ApiType, () => Observable<Vec<AccountId20>>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /** Total counted stake for selected candidates in the round */
-      staked: AugmentedQuery<
-        ApiType,
-        (arg: u32 | AnyNumber | Uint8Array) => Observable<u128>,
-        [u32]
-      > &
-        QueryableStorageEntry<ApiType, [u32]>;
       /** Top delegations for collator candidate */
       topDelegations: AugmentedQuery<
         ApiType,
@@ -1014,22 +927,26 @@ declare module "@polkadot/api-base/types/storage" {
     };
     parachainSystem: {
       /**
+       * Storage field that keeps track of bandwidth used by the unincluded segment along with the
+       * latest HRMP watermark. Used for limiting the acceptance of new blocks with respect to relay
+       * chain constraints.
+       */
+      aggregatedUnincludedSegment: AugmentedQuery<
+        ApiType,
+        () => Observable<Option<CumulusPalletParachainSystemUnincludedSegmentSegmentTracker>>,
+        []
+      > &
+        QueryableStorageEntry<ApiType, []>;
+      /**
        * The number of HRMP messages we observed in `on_initialize` and thus used that number for
        * announcing the weight of `on_initialize` and `on_finalize`.
        */
       announcedHrmpMessagesPerCandidate: AugmentedQuery<ApiType, () => Observable<u32>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /** The next authorized upgrade, if there is one. */
-      authorizedUpgrade: AugmentedQuery<
-        ApiType,
-        () => Observable<Option<CumulusPalletParachainSystemCodeUpgradeAuthorization>>,
-        []
-      > &
-        QueryableStorageEntry<ApiType, []>;
       /**
        * A custom head data that should be returned as result of `validate_block`.
        *
-       * See [`Pallet::set_custom_validation_head_data`] for more information.
+       * See `Pallet::set_custom_validation_head_data` for more information.
        */
       customValidationHeadData: AugmentedQuery<ApiType, () => Observable<Option<Bytes>>, []> &
         QueryableStorageEntry<ApiType, []>;
@@ -1046,7 +963,7 @@ declare module "@polkadot/api-base/types/storage" {
        */
       hostConfiguration: AugmentedQuery<
         ApiType,
-        () => Observable<Option<PolkadotPrimitivesV2AbridgedHostConfiguration>>,
+        () => Observable<Option<PolkadotPrimitivesV6AbridgedHostConfiguration>>,
         []
       > &
         QueryableStorageEntry<ApiType, []>;
@@ -1084,7 +1001,11 @@ declare module "@polkadot/api-base/types/storage" {
        */
       lastHrmpMqcHeads: AugmentedQuery<ApiType, () => Observable<BTreeMap<u32, H256>>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /** The relay chain block number associated with the last parachain block. */
+      /**
+       * The relay chain block number associated with the last parachain block.
+       *
+       * This is updated in `on_finalize`.
+       */
       lastRelayChainBlockNumber: AugmentedQuery<ApiType, () => Observable<u32>, []> &
         QueryableStorageEntry<ApiType, []>;
       /**
@@ -1102,10 +1023,8 @@ declare module "@polkadot/api-base/types/storage" {
        * In case of a scheduled upgrade, this storage field contains the validation code to be applied.
        *
        * As soon as the relay chain gives us the go-ahead signal, we will overwrite the
-       * [`:code`][well_known_keys::CODE] which will result the next block process with the new
-       * validation code. This concludes the upgrade process.
-       *
-       * [well_known_keys::CODE]: sp_core::storage::well_known_keys::CODE
+       * [`:code`][sp_core::storage::well_known_keys::CODE] which will result the next block process
+       * with the new validation code. This concludes the upgrade process.
        */
       pendingValidationCode: AugmentedQuery<ApiType, () => Observable<Bytes>, []> &
         QueryableStorageEntry<ApiType, []>;
@@ -1164,6 +1083,32 @@ declare module "@polkadot/api-base/types/storage" {
       > &
         QueryableStorageEntry<ApiType, []>;
       /**
+       * Latest included block descendants the runtime accepted. In other words, these are ancestors
+       * of the currently executing block which have not been included in the observed relay-chain state.
+       *
+       * The segment length is limited by the capacity returned from the [`ConsensusHook`]
+       * configured in the pallet.
+       */
+      unincludedSegment: AugmentedQuery<
+        ApiType,
+        () => Observable<Vec<CumulusPalletParachainSystemUnincludedSegmentAncestor>>,
+        []
+      > &
+        QueryableStorageEntry<ApiType, []>;
+      /**
+       * Optional upgrade go-ahead signal from the relay-chain.
+       *
+       * This storage item is a mirror of the corresponding value for the current parachain from the
+       * relay-chain. This value is ephemeral which means it doesn't hit the storage. This value is
+       * set after the inherent.
+       */
+      upgradeGoAhead: AugmentedQuery<
+        ApiType,
+        () => Observable<Option<PolkadotPrimitivesV6UpgradeGoAhead>>,
+        []
+      > &
+        QueryableStorageEntry<ApiType, []>;
+      /**
        * An option which indicates if the relay-chain restricts signalling a validation code
        * upgrade. In other words, if this is `Some` and [`NewValidationCode`] is `Some` then the
        * produced candidate will be invalid.
@@ -1174,9 +1119,12 @@ declare module "@polkadot/api-base/types/storage" {
        */
       upgradeRestrictionSignal: AugmentedQuery<
         ApiType,
-        () => Observable<Option<PolkadotPrimitivesV2UpgradeRestriction>>,
+        () => Observable<Option<PolkadotPrimitivesV6UpgradeRestriction>>,
         []
       > &
+        QueryableStorageEntry<ApiType, []>;
+      /** The factor to multiply the base delivery fee by for UMP. */
+      upwardDeliveryFeeFactor: AugmentedQuery<ApiType, () => Observable<u128>, []> &
         QueryableStorageEntry<ApiType, []>;
       /**
        * Upward messages that were sent in a block.
@@ -1191,7 +1139,7 @@ declare module "@polkadot/api-base/types/storage" {
        */
       validationData: AugmentedQuery<
         ApiType,
-        () => Observable<Option<PolkadotPrimitivesV2PersistedValidationData>>,
+        () => Observable<Option<PolkadotPrimitivesV6PersistedValidationData>>,
         []
       > &
         QueryableStorageEntry<ApiType, []>;
@@ -1202,8 +1150,8 @@ declare module "@polkadot/api-base/types/storage" {
       /**
        * The existing asset traps.
        *
-       * Key is the blake2 256 hash of (origin, versioned `MultiAssets`) pair. Value is the number
-       * of times this pair has been trapped (usually just 1 if it exists at all).
+       * Key is the blake2 256 hash of (origin, versioned `Assets`) pair. Value is the number of
+       * times this pair has been trapped (usually just 1 if it exists at all).
        */
       assetTraps: AugmentedQuery<
         ApiType,
@@ -1223,7 +1171,7 @@ declare module "@polkadot/api-base/types/storage" {
         ApiType,
         (
           arg: AccountId20 | string | Uint8Array
-        ) => Observable<Option<Vec<ITuple<[u128, XcmVersionedMultiLocation]>>>>,
+        ) => Observable<Option<Vec<ITuple<[u128, XcmVersionedLocation]>>>>,
         [AccountId20]
       > &
         QueryableStorageEntry<ApiType, [AccountId20]>;
@@ -1243,7 +1191,7 @@ declare module "@polkadot/api-base/types/storage" {
         (
           arg1: u32 | AnyNumber | Uint8Array,
           arg2: AccountId20 | string | Uint8Array,
-          arg3: XcmVersionedAssetId | { V3: any } | string | Uint8Array
+          arg3: XcmVersionedAssetId | { V3: any } | { V4: any } | string | Uint8Array
         ) => Observable<Option<PalletXcmRemoteLockedFungibleRecord>>,
         [u32, AccountId20, XcmVersionedAssetId]
       > &
@@ -1259,11 +1207,11 @@ declare module "@polkadot/api-base/types/storage" {
         ApiType,
         (
           arg1: u32 | AnyNumber | Uint8Array,
-          arg2: XcmVersionedMultiLocation | { V2: any } | { V3: any } | string | Uint8Array
+          arg2: XcmVersionedLocation | { V2: any } | { V3: any } | { V4: any } | string | Uint8Array
         ) => Observable<Option<u32>>,
-        [u32, XcmVersionedMultiLocation]
+        [u32, XcmVersionedLocation]
       > &
-        QueryableStorageEntry<ApiType, [u32, XcmVersionedMultiLocation]>;
+        QueryableStorageEntry<ApiType, [u32, XcmVersionedLocation]>;
       /**
        * Destinations whose latest XCM version we would like to know. Duplicates not allowed, and
        * the `u32` counter is the number of times that a send to the destination has been attempted,
@@ -1271,7 +1219,7 @@ declare module "@polkadot/api-base/types/storage" {
        */
       versionDiscoveryQueue: AugmentedQuery<
         ApiType,
-        () => Observable<Vec<ITuple<[XcmVersionedMultiLocation, u32]>>>,
+        () => Observable<Vec<ITuple<[XcmVersionedLocation, u32]>>>,
         []
       > &
         QueryableStorageEntry<ApiType, []>;
@@ -1280,11 +1228,11 @@ declare module "@polkadot/api-base/types/storage" {
         ApiType,
         (
           arg1: u32 | AnyNumber | Uint8Array,
-          arg2: XcmVersionedMultiLocation | { V2: any } | { V3: any } | string | Uint8Array
+          arg2: XcmVersionedLocation | { V2: any } | { V3: any } | { V4: any } | string | Uint8Array
         ) => Observable<Option<u64>>,
-        [u32, XcmVersionedMultiLocation]
+        [u32, XcmVersionedLocation]
       > &
-        QueryableStorageEntry<ApiType, [u32, XcmVersionedMultiLocation]>;
+        QueryableStorageEntry<ApiType, [u32, XcmVersionedLocation]>;
       /**
        * The target locations that are subscribed to our version changes, as well as the most recent
        * of our versions we informed them of.
@@ -1293,11 +1241,11 @@ declare module "@polkadot/api-base/types/storage" {
         ApiType,
         (
           arg1: u32 | AnyNumber | Uint8Array,
-          arg2: XcmVersionedMultiLocation | { V2: any } | { V3: any } | string | Uint8Array
+          arg2: XcmVersionedLocation | { V2: any } | { V3: any } | { V4: any } | string | Uint8Array
         ) => Observable<Option<ITuple<[u64, SpWeightsWeightV2Weight, u32]>>>,
-        [u32, XcmVersionedMultiLocation]
+        [u32, XcmVersionedLocation]
       > &
-        QueryableStorageEntry<ApiType, [u32, XcmVersionedMultiLocation]>;
+        QueryableStorageEntry<ApiType, [u32, XcmVersionedLocation]>;
       /** Global suspension state of the XCM executor. */
       xcmExecutionSuspended: AugmentedQuery<ApiType, () => Observable<bool>, []> &
         QueryableStorageEntry<ApiType, []>;
@@ -1314,9 +1262,16 @@ declare module "@polkadot/api-base/types/storage" {
       > &
         QueryableStorageEntry<ApiType, [ITuple<[H256, u32]>]>;
       /** The request status of a given hash. */
-      statusFor: AugmentedQuery<
+      requestStatusFor: AugmentedQuery<
         ApiType,
         (arg: H256 | string | Uint8Array) => Observable<Option<PalletPreimageRequestStatus>>,
+        [H256]
+      > &
+        QueryableStorageEntry<ApiType, [H256]>;
+      /** The request status of a given hash. */
+      statusFor: AugmentedQuery<
+        ApiType,
+        (arg: H256 | string | Uint8Array) => Observable<Option<PalletPreimageOldRequestStatus>>,
         [H256]
       > &
         QueryableStorageEntry<ApiType, [H256]>;
@@ -1403,8 +1358,8 @@ declare module "@polkadot/api-base/types/storage" {
       > &
         QueryableStorageEntry<ApiType, [u16]>;
       /**
-       * The metadata is a general information concerning the referendum. The `PreimageHash` refers
-       * to the preimage of the `Preimages` provider which can be a JSON dump or IPFS hash of a JSON file.
+       * The metadata is a general information concerning the referendum. The `Hash` refers to the
+       * preimage of the `Preimages` provider which can be a JSON dump or IPFS hash of a JSON file.
        *
        * Consider a garbage collection for a metadata of finished referendums to `unrequest`
        * (remove) large preimages.
@@ -1437,6 +1392,23 @@ declare module "@polkadot/api-base/types/storage" {
         [u16]
       > &
         QueryableStorageEntry<ApiType, [u16]>;
+      /** Generic query */
+      [key: string]: QueryableStorageEntry<ApiType>;
+    };
+    relayStorageRoots: {
+      /** Map of relay block number to relay storage root */
+      relayStorageRoot: AugmentedQuery<
+        ApiType,
+        (arg: u32 | AnyNumber | Uint8Array) => Observable<Option<H256>>,
+        [u32]
+      > &
+        QueryableStorageEntry<ApiType, [u32]>;
+      /**
+       * List of all the keys in `RelayStorageRoot`. Used to remove the oldest key without having to
+       * iterate over all of them.
+       */
+      relayStorageRootKeys: AugmentedQuery<ApiType, () => Observable<Vec<u32>>, []> &
+        QueryableStorageEntry<ApiType, []>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
@@ -1486,6 +1458,13 @@ declare module "@polkadot/api-base/types/storage" {
       /** Total length (in bytes) for all extrinsics put together, for the current block. */
       allExtrinsicsLen: AugmentedQuery<ApiType, () => Observable<Option<u32>>, []> &
         QueryableStorageEntry<ApiType, []>;
+      /** `Some` if a code upgrade has been authorized. */
+      authorizedUpgrade: AugmentedQuery<
+        ApiType,
+        () => Observable<Option<FrameSystemCodeUpgradeAuthorization>>,
+        []
+      > &
+        QueryableStorageEntry<ApiType, []>;
       /** Map of block numbers to block hashes. */
       blockHash: AugmentedQuery<
         ApiType,
@@ -1525,7 +1504,7 @@ declare module "@polkadot/api-base/types/storage" {
        * light-clients to leverage the changes trie storage tracking mechanism and in case of
        * changes fetch the list of events of interest.
        *
-       * The value has the type `(T::BlockNumber, EventIndex)` because if we used only just the
+       * The value has the type `(BlockNumberFor<T>, EventIndex)` because if we used only just the
        * `EventIndex` then in case if the topic has the same contents on the next block no
        * notification will be triggered thus the event might be lost.
        */
@@ -1573,41 +1552,16 @@ declare module "@polkadot/api-base/types/storage" {
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };
-    techCommitteeCollective: {
-      /** The current members of the collective. This is stored sorted (just by value). */
-      members: AugmentedQuery<ApiType, () => Observable<Vec<AccountId20>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** The prime member that helps determine the default vote behavior in case of absentations. */
-      prime: AugmentedQuery<ApiType, () => Observable<Option<AccountId20>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Proposals so far. */
-      proposalCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Actual proposal for a given hash, if it's current. */
-      proposalOf: AugmentedQuery<
-        ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<Option<Call>>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /** The hashes of the active proposals. */
-      proposals: AugmentedQuery<ApiType, () => Observable<Vec<H256>>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Votes on a given proposal, if it is ongoing. */
-      voting: AugmentedQuery<
-        ApiType,
-        (arg: H256 | string | Uint8Array) => Observable<Option<PalletCollectiveVotes>>,
-        [H256]
-      > &
-        QueryableStorageEntry<ApiType, [H256]>;
-      /** Generic query */
-      [key: string]: QueryableStorageEntry<ApiType>;
-    };
     timestamp: {
-      /** Did the timestamp get updated in this block? */
+      /**
+       * Whether the timestamp has been updated in this block.
+       *
+       * This value is updated to `true` upon successful submission of a timestamp by a node. It is
+       * then checked at the end of each block execution in the `on_finalize` hook.
+       */
       didUpdate: AugmentedQuery<ApiType, () => Observable<bool>, []> &
         QueryableStorageEntry<ApiType, []>;
-      /** Current time for the current block. */
+      /** The current time for the current block. */
       now: AugmentedQuery<ApiType, () => Observable<u64>, []> & QueryableStorageEntry<ApiType, []>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
@@ -1638,6 +1592,16 @@ declare module "@polkadot/api-base/types/storage" {
       proposals: AugmentedQuery<
         ApiType,
         (arg: u32 | AnyNumber | Uint8Array) => Observable<Option<PalletTreasuryProposal>>,
+        [u32]
+      > &
+        QueryableStorageEntry<ApiType, [u32]>;
+      /** The count of spends that have been made. */
+      spendCount: AugmentedQuery<ApiType, () => Observable<u32>, []> &
+        QueryableStorageEntry<ApiType, []>;
+      /** Spends that have been approved and being processed. */
+      spends: AugmentedQuery<
+        ApiType,
+        (arg: u32 | AnyNumber | Uint8Array) => Observable<Option<PalletTreasurySpendStatus>>,
         [u32]
       > &
         QueryableStorageEntry<ApiType, [u32]>;
@@ -1685,25 +1649,24 @@ declare module "@polkadot/api-base/types/storage" {
       [key: string]: QueryableStorageEntry<ApiType>;
     };
     xcmpQueue: {
-      /** Counter for the related counted storage map */
-      counterForOverweight: AugmentedQuery<ApiType, () => Observable<u32>, []> &
-        QueryableStorageEntry<ApiType, []>;
-      /** Inbound aggregate XCMP messages. It can only be one per ParaId/block. */
-      inboundXcmpMessages: AugmentedQuery<
+      /** The factor to multiply the base delivery fee by. */
+      deliveryFeeFactor: AugmentedQuery<
         ApiType,
-        (
-          arg1: u32 | AnyNumber | Uint8Array,
-          arg2: u32 | AnyNumber | Uint8Array
-        ) => Observable<Bytes>,
-        [u32, u32]
+        (arg: u32 | AnyNumber | Uint8Array) => Observable<u128>,
+        [u32]
       > &
-        QueryableStorageEntry<ApiType, [u32, u32]>;
-      /** Status of the inbound XCMP channels. */
-      inboundXcmpStatus: AugmentedQuery<
-        ApiType,
-        () => Observable<Vec<CumulusPalletXcmpQueueInboundChannelDetails>>,
-        []
-      > &
+        QueryableStorageEntry<ApiType, [u32]>;
+      /**
+       * The suspended inbound XCMP channels. All others are not suspended.
+       *
+       * This is a `StorageValue` instead of a `StorageMap` since we expect multiple reads per block
+       * to different keys with a one byte payload. The access to `BoundedBTreeSet` will be cached
+       * within the block and therefore only included once in the proof size.
+       *
+       * NOTE: The PoV benchmarking cannot know this and will over-estimate, but the actual proof
+       * will be smaller.
+       */
+      inboundXcmpSuspended: AugmentedQuery<ApiType, () => Observable<BTreeSet<u32>>, []> &
         QueryableStorageEntry<ApiType, []>;
       /** The messages outbound in a given XCMP channel. */
       outboundXcmpMessages: AugmentedQuery<
@@ -1728,23 +1691,6 @@ declare module "@polkadot/api-base/types/storage" {
         () => Observable<Vec<CumulusPalletXcmpQueueOutboundChannelDetails>>,
         []
       > &
-        QueryableStorageEntry<ApiType, []>;
-      /**
-       * The messages that exceeded max individual message weight budget.
-       *
-       * These message stay in this storage map until they are manually dispatched via `service_overweight`.
-       */
-      overweight: AugmentedQuery<
-        ApiType,
-        (arg: u64 | AnyNumber | Uint8Array) => Observable<Option<ITuple<[u32, u32, Bytes]>>>,
-        [u64]
-      > &
-        QueryableStorageEntry<ApiType, [u64]>;
-      /**
-       * The number of overweight messages ever recorded in `Overweight`. Also doubles as the next
-       * available free overweight index.
-       */
-      overweightCount: AugmentedQuery<ApiType, () => Observable<u64>, []> &
         QueryableStorageEntry<ApiType, []>;
       /** The configuration which controls the dynamics of the outbound queue. */
       queueConfig: AugmentedQuery<
@@ -1774,11 +1720,11 @@ declare module "@polkadot/api-base/types/storage" {
       destinationAssetFeePerSecond: AugmentedQuery<
         ApiType,
         (
-          arg: XcmV3MultiLocation | { parents?: any; interior?: any } | string | Uint8Array
+          arg: StagingXcmV4Location | { parents?: any; interior?: any } | string | Uint8Array
         ) => Observable<Option<u128>>,
-        [XcmV3MultiLocation]
+        [StagingXcmV4Location]
       > &
-        QueryableStorageEntry<ApiType, [XcmV3MultiLocation]>;
+        QueryableStorageEntry<ApiType, [StagingXcmV4Location]>;
       /**
        * Since we are using pallet-utility for account derivation (through AsDerivative), we need to
        * provide an index for the account derivation. This storage item stores the index assigned
@@ -1790,19 +1736,26 @@ declare module "@polkadot/api-base/types/storage" {
         [u16]
       > &
         QueryableStorageEntry<ApiType, [u16]>;
+      /** Stores the indices of relay chain pallets */
+      relayIndices: AugmentedQuery<
+        ApiType,
+        () => Observable<PalletXcmTransactorRelayIndicesRelayChainIndices>,
+        []
+      > &
+        QueryableStorageEntry<ApiType, []>;
       /**
-       * Stores the transact info of a MultiLocation. This defines how much extra weight we need to
-       * add when we want to transact in the destination chain and maximum amount of weight allowed
-       * by the destination chain
+       * Stores the transact info of a Location. This defines how much extra weight we need to add
+       * when we want to transact in the destination chain and maximum amount of weight allowed by
+       * the destination chain
        */
       transactInfoWithWeightLimit: AugmentedQuery<
         ApiType,
         (
-          arg: XcmV3MultiLocation | { parents?: any; interior?: any } | string | Uint8Array
+          arg: StagingXcmV4Location | { parents?: any; interior?: any } | string | Uint8Array
         ) => Observable<Option<PalletXcmTransactorRemoteTransactInfoWithMaxWeight>>,
-        [XcmV3MultiLocation]
+        [StagingXcmV4Location]
       > &
-        QueryableStorageEntry<ApiType, [XcmV3MultiLocation]>;
+        QueryableStorageEntry<ApiType, [StagingXcmV4Location]>;
       /** Generic query */
       [key: string]: QueryableStorageEntry<ApiType>;
     };

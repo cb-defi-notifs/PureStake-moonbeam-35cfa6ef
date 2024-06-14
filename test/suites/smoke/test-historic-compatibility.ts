@@ -5,10 +5,11 @@ import { NetworkTestArtifact, tracingTxns } from "../../helpers/tracing-txns.js"
 import { ApiPromise } from "@polkadot/api";
 import { rateLimiter } from "../../helpers/common.js";
 import { ethers } from "ethers";
+
 const limiter = rateLimiter();
 
 describeSuite({
-  id: "S1200",
+  id: "S14",
   title: "Verifying historic compatibility",
   foundationMethods: "read_only",
   testCases: async ({ context, it, log }) => {
@@ -20,10 +21,10 @@ describeSuite({
     let paraApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
+      paraApi = context.polkadotJs("para");
       const chainId = (await paraApi.query.ethereumChainId.chainId()).toString();
       log(`Loading test data for chainId ${chainId}.`);
-      traceStatic = tracingTxns.find((a) => a.chainId.toString() === chainId);
+      traceStatic = tracingTxns.find((a) => a.chainId.toString() === chainId)!;
       const networkName = (await paraApi.rpc.system.chain()).toString();
       const latestBlockNumberToCheck = traceStatic
         ? Math.max(...traceStatic.testData.map((d) => d.blockNumber))
@@ -66,7 +67,7 @@ describeSuite({
               `Successful tracing response from runtime ${a.runtime} in block #${a.blockNumber}.`
             );
             return { runtime: a.runtime, blockNumber: a.blockNumber, error: false, result };
-          } catch (e) {
+          } catch (e: any) {
             return { runtime: a.runtime, blockNumber: a.blockNumber, error: true, result: e };
           }
         });
@@ -110,7 +111,7 @@ describeSuite({
             log(`Successful response from runtime ${a.runtime} in block #${a.blockNumber}.`);
             const error = result == null;
             return { runtime: a.runtime, blockNumber: a.blockNumber, error, result };
-          } catch (e) {
+          } catch (e: any) {
             return { runtime: a.runtime, blockNumber: a.blockNumber, error: true, result: e };
           }
         });
@@ -149,7 +150,7 @@ describeSuite({
           "eth_syncing",
           []
         );
-        expect(result).to.satisfy((s) => typeof s == "number" || typeof s == "boolean");
+        expect(result).to.satisfy((s: any) => typeof s == "number" || typeof s == "boolean");
       },
     });
 
@@ -504,7 +505,7 @@ describeSuite({
             [{ fromBlock: "latest" }]
           );
           expect(result).to.not.be.null;
-        } catch (e) {
+        } catch (e: any) {
           if (e.toString().includes("Error: Filter pool is full")) {
             log(`Filter pool is full, skipping test.`);
             return; // TODO: replace this with this.skip() when added to vitest
@@ -525,7 +526,7 @@ describeSuite({
             []
           );
           expect(result).to.not.be.null;
-        } catch (e) {
+        } catch (e: any) {
           if (e.toString().includes("Error: Filter pool is full")) {
             log(`Filter pool is full, skipping test.`);
             return; // TODO: replace this with this.skip() when added to vitest
@@ -550,7 +551,7 @@ describeSuite({
             [filterId]
           );
           expect(result).to.not.be.null;
-        } catch (e) {
+        } catch (e: any) {
           if (e.toString().includes("Error: Filter pool is full")) {
             log(`Filter pool is full, skipping test.`);
             return; // TODO: replace this with this.skip() when added to vitest
@@ -575,7 +576,7 @@ describeSuite({
             [filterId]
           );
           expect(result).to.not.be.null;
-        } catch (e) {
+        } catch (e: any) {
           if (e.toString().includes("Error: Filter pool is full")) {
             log(`Filter pool is full, skipping test.`);
             return; // TODO: replace this with this.skip() when added to vitest
@@ -600,7 +601,7 @@ describeSuite({
             [filterId]
           );
           expect(result).to.be.true;
-        } catch (e) {
+        } catch (e: any) {
           if (e.toString().includes("Error: Filter pool is full")) {
             log(`Filter pool is full, skipping test.`);
             return; // TODO: replace this with this.skip() when added to vitest

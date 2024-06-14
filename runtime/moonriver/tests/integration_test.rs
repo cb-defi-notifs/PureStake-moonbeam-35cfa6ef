@@ -22,30 +22,28 @@ mod common;
 use common::*;
 
 use fp_evm::{Context, IsPrecompileResult};
+use frame_support::traits::fungible::Inspect;
 use frame_support::{
 	assert_noop, assert_ok,
-	dispatch::{DispatchClass, Dispatchable},
-	traits::{
-		fungible::Inspect, fungibles::Inspect as FungiblesInspect, Currency as CurrencyT,
-		EnsureOrigin, PalletInfo, StorageInfo, StorageInfoTrait,
-	},
+	dispatch::DispatchClass,
+	traits::{Currency as CurrencyT, EnsureOrigin, PalletInfo, StorageInfo, StorageInfoTrait},
 	weights::{constants::WEIGHT_REF_TIME_PER_SECOND, Weight},
 	StorageHasher, Twox128,
 };
 use moonbeam_xcm_benchmarks::weights::XcmWeight;
+use moonkit_xcm_primitives::AccountIdAssetIdConversion;
+use moonriver_runtime::currency::{GIGAWEI, WEI};
 use moonriver_runtime::{
-	asset_config::LocalAssetInstance,
+	asset_config::ForeignAssetInstance,
 	xcm_config::{CurrencyId, SelfReserve},
-	AssetId, CouncilCollective, LocalAssets, OpenTechCommitteeCollective, PolkadotXcm, Precompiles,
-	RuntimeBlockWeights, TechCommitteeCollective, TransactionPayment, TreasuryCouncilCollective,
-	XTokens, XcmTransactor, FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX,
-	LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX,
+	AssetId, Balances, CrowdloanRewards, Executive, OpenTechCommitteeCollective, PolkadotXcm,
+	Precompiles, RuntimeBlockWeights, TransactionPayment, TransactionPaymentAsGasPrice,
+	TreasuryCouncilCollective, XTokens, XcmTransactor, FOREIGN_ASSET_PRECOMPILE_ADDRESS_PREFIX,
+	WEEKS,
 };
 use nimbus_primitives::NimbusId;
 use pallet_evm::PrecompileSet;
-use pallet_evm_precompileset_assets_erc20::{
-	AccountIdAssetIdConversion, IsLocal, SELECTOR_LOG_APPROVAL, SELECTOR_LOG_TRANSFER,
-};
+use pallet_evm_precompileset_assets_erc20::{SELECTOR_LOG_APPROVAL, SELECTOR_LOG_TRANSFER};
 use pallet_transaction_payment::Multiplier;
 use pallet_xcm_transactor::{Currency, CurrencyPayment, TransactWeights};
 use parity_scale_codec::Encode;
@@ -57,12 +55,15 @@ use precompile_utils::{
 };
 use sha3::{Digest, Keccak256};
 use sp_core::{ByteArray, Pair, H160, U256};
-use sp_runtime::{traits::Convert, DispatchError, ModuleError, TokenError};
+use sp_runtime::{
+	traits::{Convert, Dispatchable},
+	BuildStorage, DispatchError, ModuleError,
+};
 use std::str::from_utf8;
 use xcm::latest::prelude::*;
-use xcm::{VersionedMultiAssets, VersionedMultiLocation};
+use xcm::{VersionedAssets, VersionedLocation};
 use xcm_builder::{ParentIsPreset, SiblingParachainConvertsVia};
-use xcm_executor::traits::Convert as XcmConvert;
+use xcm_executor::traits::ConvertLocation;
 
 type BatchPCall = pallet_evm_precompile_batch::BatchPrecompileCall<Runtime>;
 type CrowdloanRewardsPCall =
@@ -72,10 +73,9 @@ type XcmUtilsPCall = pallet_evm_precompile_xcm_utils::XcmUtilsPrecompileCall<
 	moonriver_runtime::xcm_config::XcmExecutorConfig,
 >;
 type XtokensPCall = pallet_evm_precompile_xtokens::XtokensPrecompileCall<Runtime>;
-type LocalAssetsPCall = pallet_evm_precompileset_assets_erc20::Erc20AssetsPrecompileSetCall<
+type ForeignAssetsPCall = pallet_evm_precompileset_assets_erc20::Erc20AssetsPrecompileSetCall<
 	Runtime,
-	IsLocal,
-	LocalAssetInstance,
+	ForeignAssetInstance,
 >;
 type XcmTransactorV2PCall =
 	pallet_evm_precompile_xcm_transactor::v2::XcmTransactorPrecompileV2Call<Runtime>;
@@ -90,15 +90,6 @@ fn xcmp_queue_controller_origin_is_root() {
 		<moonriver_runtime::Runtime as cumulus_pallet_xcmp_queue::Config
 		>::ControllerOrigin::ensure_origin(root_origin())
 	);
-}
-
-#[test]
-fn fast_track_available() {
-	assert!(moonriver_runtime::get!(
-		pallet_democracy,
-		InstantAllowed,
-		bool
-	));
 }
 
 #[test]
@@ -127,9 +118,6 @@ fn verify_pallet_prefixes() {
 	is_pallet_prefix::<moonriver_runtime::ParachainStaking>("ParachainStaking");
 	is_pallet_prefix::<moonriver_runtime::MaintenanceMode>("MaintenanceMode");
 	is_pallet_prefix::<moonriver_runtime::Scheduler>("Scheduler");
-	is_pallet_prefix::<moonriver_runtime::Democracy>("Democracy");
-	is_pallet_prefix::<moonriver_runtime::CouncilCollective>("CouncilCollective");
-	is_pallet_prefix::<moonriver_runtime::TechCommitteeCollective>("TechCommitteeCollective");
 	is_pallet_prefix::<moonriver_runtime::OpenTechCommitteeCollective>(
 		"OpenTechCommitteeCollective",
 	);
@@ -149,9 +137,10 @@ fn verify_pallet_prefixes() {
 	is_pallet_prefix::<moonriver_runtime::Migrations>("Migrations");
 	is_pallet_prefix::<moonriver_runtime::XcmTransactor>("XcmTransactor");
 	is_pallet_prefix::<moonriver_runtime::ProxyGenesisCompanion>("ProxyGenesisCompanion");
-	is_pallet_prefix::<moonriver_runtime::LocalAssets>("LocalAssets");
 	is_pallet_prefix::<moonriver_runtime::MoonbeamOrbiters>("MoonbeamOrbiters");
 	is_pallet_prefix::<moonriver_runtime::TreasuryCouncilCollective>("TreasuryCouncilCollective");
+	is_pallet_prefix::<moonriver_runtime::MoonbeamLazyMigrations>("MoonbeamLazyMigrations");
+	is_pallet_prefix::<moonriver_runtime::RelayStorageRoots>("RelayStorageRoots");
 
 	let prefix = |pallet_name, storage_name| {
 		let mut res = [0u8; 32];
@@ -216,6 +205,20 @@ fn verify_pallet_prefixes() {
 				max_values: None,
 				max_size: Some(1037),
 			},
+			StorageInfo {
+				pallet_name: b"Balances".to_vec(),
+				storage_name: b"Holds".to_vec(),
+				prefix: prefix(b"Balances", b"Holds"),
+				max_values: None,
+				max_size: Some(55),
+			},
+			StorageInfo {
+				pallet_name: b"Balances".to_vec(),
+				storage_name: b"Freezes".to_vec(),
+				prefix: prefix(b"Balances", b"Freezes"),
+				max_values: None,
+				max_size: Some(37),
+			},
 		]
 	);
 	assert_eq!(
@@ -247,22 +250,29 @@ fn verify_pallet_prefixes() {
 			max_size: None,
 		},]
 	);
+	assert_eq!(
+		<moonriver_runtime::RelayStorageRoots as StorageInfoTrait>::storage_info(),
+		vec![
+			StorageInfo {
+				pallet_name: b"RelayStorageRoots".to_vec(),
+				storage_name: b"RelayStorageRoot".to_vec(),
+				prefix: prefix(b"RelayStorageRoots", b"RelayStorageRoot"),
+				max_values: None,
+				max_size: Some(44),
+			},
+			StorageInfo {
+				pallet_name: b"RelayStorageRoots".to_vec(),
+				storage_name: b"RelayStorageRootKeys".to_vec(),
+				prefix: prefix(b"RelayStorageRoots", b"RelayStorageRootKeys"),
+				max_values: Some(1),
+				max_size: Some(121),
+			},
+		]
+	);
 }
 
 #[test]
 fn test_collectives_storage_item_prefixes() {
-	for StorageInfo { pallet_name, .. } in
-		<moonriver_runtime::CouncilCollective as StorageInfoTrait>::storage_info()
-	{
-		assert_eq!(pallet_name, b"CouncilCollective".to_vec());
-	}
-
-	for StorageInfo { pallet_name, .. } in
-		<moonriver_runtime::TechCommitteeCollective as StorageInfoTrait>::storage_info()
-	{
-		assert_eq!(pallet_name, b"TechCommitteeCollective".to_vec());
-	}
-
 	for StorageInfo { pallet_name, .. } in
 		<moonriver_runtime::TreasuryCouncilCollective as StorageInfoTrait>::storage_info()
 	{
@@ -279,20 +289,6 @@ fn test_collectives_storage_item_prefixes() {
 #[test]
 fn collective_set_members_root_origin_works() {
 	ExtBuilder::default().build().execute_with(|| {
-		// CouncilCollective
-		assert_ok!(CouncilCollective::set_members(
-			<Runtime as frame_system::Config>::RuntimeOrigin::root(),
-			vec![AccountId::from(ALICE), AccountId::from(BOB)],
-			Some(AccountId::from(ALICE)),
-			2
-		));
-		// TechCommitteeCollective
-		assert_ok!(TechCommitteeCollective::set_members(
-			<Runtime as frame_system::Config>::RuntimeOrigin::root(),
-			vec![AccountId::from(ALICE), AccountId::from(BOB)],
-			Some(AccountId::from(ALICE)),
-			2
-		));
 		// TreasuryCouncilCollective
 		assert_ok!(TreasuryCouncilCollective::set_members(
 			<Runtime as frame_system::Config>::RuntimeOrigin::root(),
@@ -320,32 +316,6 @@ fn collective_set_members_general_admin_origin_works() {
 		let root_caller = <Runtime as frame_system::Config>::RuntimeOrigin::root();
 		let alice = AccountId::from(ALICE);
 
-		// CouncilCollective
-		let _ = Utility::dispatch_as(
-			root_caller.clone(),
-			Box::new(OriginCaller::Origins(CustomOrigin::GeneralAdmin)),
-			Box::new(
-				pallet_collective::Call::<Runtime, pallet_collective::Instance1>::set_members {
-					new_members: vec![alice, AccountId::from(BOB)],
-					prime: Some(alice),
-					old_count: 2,
-				}
-				.into(),
-			),
-		);
-		// TechCommitteeCollective
-		let _ = Utility::dispatch_as(
-			root_caller.clone(),
-			Box::new(OriginCaller::Origins(CustomOrigin::GeneralAdmin)),
-			Box::new(
-				pallet_collective::Call::<Runtime, pallet_collective::Instance2>::set_members {
-					new_members: vec![alice, AccountId::from(BOB)],
-					prime: Some(alice),
-					old_count: 2,
-				}
-				.into(),
-			),
-		);
 		// TreasuryCouncilCollective
 		let _ = Utility::dispatch_as(
 			root_caller.clone(),
@@ -388,7 +358,7 @@ fn collective_set_members_general_admin_origin_works() {
 				})
 				.collect::<Vec<_>>()
 				.len(),
-			4
+			2
 		)
 	});
 }
@@ -397,22 +367,6 @@ fn collective_set_members_general_admin_origin_works() {
 fn collective_set_members_signed_origin_does_not_work() {
 	let alice = AccountId::from(ALICE);
 	ExtBuilder::default().build().execute_with(|| {
-		// CouncilCollective
-		assert!(CouncilCollective::set_members(
-			<Runtime as frame_system::Config>::RuntimeOrigin::signed(alice),
-			vec![alice, AccountId::from(BOB)],
-			Some(alice),
-			2
-		)
-		.is_err());
-		// TechCommitteeCollective
-		assert!(TechCommitteeCollective::set_members(
-			<Runtime as frame_system::Config>::RuntimeOrigin::signed(alice),
-			vec![AccountId::from(ALICE), AccountId::from(BOB)],
-			Some(AccountId::from(ALICE)),
-			2
-		)
-		.is_err());
 		// TreasuryCouncilCollective
 		assert!(TreasuryCouncilCollective::set_members(
 			<Runtime as frame_system::Config>::RuntimeOrigin::signed(alice),
@@ -461,16 +415,17 @@ fn verify_pallet_indices() {
 	is_pallet_index::<moonriver_runtime::Identity>(33);
 	is_pallet_index::<moonriver_runtime::Migrations>(34);
 	is_pallet_index::<moonriver_runtime::ProxyGenesisCompanion>(35);
+	is_pallet_index::<moonriver_runtime::MoonbeamLazyMigrations>(37);
 	// Ethereum compatibility
 	is_pallet_index::<moonriver_runtime::EthereumChainId>(50);
 	is_pallet_index::<moonriver_runtime::EVM>(51);
 	is_pallet_index::<moonriver_runtime::Ethereum>(52);
 	// Governance
 	is_pallet_index::<moonriver_runtime::Scheduler>(60);
-	is_pallet_index::<moonriver_runtime::Democracy>(61);
+	// is_pallet_index::<moonriver_runtime::Democracy>(61); Removed
 	// Council
-	is_pallet_index::<moonriver_runtime::CouncilCollective>(70);
-	is_pallet_index::<moonriver_runtime::TechCommitteeCollective>(71);
+	// is_pallet_index::<moonriver_runtime::CouncilCollective>(70); Removed
+	// is_pallet_index::<moonriver_runtime::TechCommitteeCollective>(71); Removed
 	is_pallet_index::<moonriver_runtime::TreasuryCouncilCollective>(72);
 	is_pallet_index::<moonriver_runtime::OpenTechCommitteeCollective>(73);
 	// Treasury
@@ -486,12 +441,11 @@ fn verify_pallet_indices() {
 	is_pallet_index::<moonriver_runtime::AssetManager>(105);
 	is_pallet_index::<moonriver_runtime::XTokens>(106);
 	is_pallet_index::<moonriver_runtime::XcmTransactor>(107);
-	is_pallet_index::<moonriver_runtime::LocalAssets>(108);
 }
 
 #[test]
 fn verify_reserved_indices() {
-	use frame_support::metadata::*;
+	use frame_metadata::*;
 	let metadata = moonriver_runtime::Runtime::metadata();
 	let metadata = match metadata.1 {
 		RuntimeMetadata::V14(metadata) => metadata,
@@ -499,7 +453,8 @@ fn verify_reserved_indices() {
 	};
 	// 40: Sudo
 	// 53: BaseFee
-	let reserved = vec![40, 53];
+	// 108: pallet_assets::<Instance1>
+	let reserved = vec![40, 53, 108];
 	let existing = metadata
 		.pallets
 		.iter()
@@ -601,7 +556,7 @@ fn transfer_through_evm_to_stake() {
 				})
 			);
 			// Alice transfer from free balance 20000 MOVR to Bob
-			assert_ok!(Balances::transfer(
+			assert_ok!(Balances::transfer_allow_death(
 				origin_of(AccountId::from(ALICE)),
 				AccountId::from(BOB),
 				20_000 * MOVR,
@@ -660,21 +615,23 @@ fn reward_block_authors() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
-			for x in 2..1199 {
-				run_to_block(x, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
-			}
+			increase_last_relay_slot_number(1);
+
+			// Just before round 3
+			run_to_block(2399, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+
 			// no rewards doled out yet
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(ALICE)),
-				10_000 * MOVR,
+				10_100 * MOVR,
 			);
 			assert_eq!(Balances::usable_balance(AccountId::from(BOB)), 9500 * MOVR,);
-			run_to_block(1201, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+			run_to_block(2401, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+
 			// rewards minted and distributed
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(ALICE)),
-				11447666666208000000000,
+				11547666666208000000000,
 			);
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(BOB)),
@@ -704,35 +661,47 @@ fn reward_block_authors_with_parachain_bond_reserved() {
 		)])
 		.build()
 		.execute_with(|| {
-			set_parachain_inherent_data();
+			increase_last_relay_slot_number(1);
 			assert_ok!(ParachainStaking::set_parachain_bond_account(
 				root_origin(),
 				AccountId::from(CHARLIE),
 			),);
-			for x in 2..1199 {
-				run_to_block(x, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
-			}
-			// no rewards doled out yet
+
+			// Stop just before round 2
+			run_to_block(1199, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+
+			// no collator rewards doled out yet
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(ALICE)),
-				10_000 * MOVR,
+				10_100 * MOVR,
 			);
 			assert_eq!(Balances::usable_balance(AccountId::from(BOB)), 9500 * MOVR,);
-			assert_eq!(Balances::usable_balance(AccountId::from(CHARLIE)), MOVR,);
+
+			// Go to round 2
 			run_to_block(1201, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+
+			// 30% reserved for parachain bond
+			assert_eq!(
+				Balances::usable_balance(AccountId::from(CHARLIE)),
+				452515000000000000000,
+			);
+
+			// Go to round 3
+			run_to_block(2401, Some(NimbusId::from_slice(&ALICE_NIMBUS).unwrap()));
+
 			// rewards minted and distributed
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(ALICE)),
-				11017700475903800000000,
+				11117700475903800000000,
 			);
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(BOB)),
 				9535834523343675000000,
 			);
-			// 30% reserved for parachain bond
+			// 30% reserved for parachain bond again
 			assert_eq!(
 				Balances::usable_balance(AccountId::from(CHARLIE)),
-				452515000000000000000,
+				910802725000000000000,
 			);
 		});
 }
@@ -1291,8 +1260,8 @@ fn run_with_system_weight<F>(w: Weight, mut assertions: F)
 where
 	F: FnMut() -> (),
 {
-	let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::default()
-		.build_storage::<Runtime>()
+	let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+		.build_storage()
 		.unwrap()
 		.into();
 	t.execute_with(|| {
@@ -1369,7 +1338,7 @@ fn ethereum_invalid_transaction() {
 			Executive::apply_extrinsic(unchecked_eth_tx(INVALID_ETH_TX)),
 			Err(
 				sp_runtime::transaction_validity::TransactionValidityError::Invalid(
-					sp_runtime::transaction_validity::InvalidTransaction::Custom(3u8)
+					sp_runtime::transaction_validity::InvalidTransaction::Custom(0u8)
 				)
 			)
 		);
@@ -1426,7 +1395,7 @@ fn transfer_ed_0_substrate() {
 		.build()
 		.execute_with(|| {
 			// Substrate transfer
-			assert_ok!(Balances::transfer(
+			assert_ok!(Balances::transfer_allow_death(
 				origin_of(AccountId::from(ALICE)),
 				AccountId::from(BOB),
 				1 * MOVR,
@@ -1611,7 +1580,7 @@ fn root_can_change_default_xcm_vers() {
 			(AccountId::from(BOB), 1_000 * MOVR),
 		])
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -1623,13 +1592,14 @@ fn root_can_change_default_xcm_vers() {
 		}])
 		.build()
 		.execute_with(|| {
-			let source_location = AssetType::Xcm(MultiLocation::parent());
-			let dest = MultiLocation {
+			let source_location = AssetType::Xcm(xcm::v3::Location::parent());
+			let dest = Location {
 				parents: 1,
-				interior: X1(AccountId32 {
+				interior: [AccountId32 {
 					network: None,
 					id: [1u8; 32],
-				}),
+				}]
+				.into(),
 			};
 			let source_id: moonriver_runtime::AssetId = source_location.clone().into();
 			// Default XCM version is not set yet, so xtokens should fail because it does not
@@ -1639,7 +1609,7 @@ fn root_can_change_default_xcm_vers() {
 					origin_of(AccountId::from(ALICE)),
 					CurrencyId::ForeignAsset(source_id),
 					100_000_000_000_000,
-					Box::new(xcm::VersionedMultiLocation::V3(dest.clone())),
+					Box::new(xcm::VersionedLocation::V4(dest.clone())),
 					WeightLimit::Limited(4000000000.into())
 				),
 				orml_xtokens::Error::<Runtime>::XcmExecutionFailed
@@ -1656,7 +1626,7 @@ fn root_can_change_default_xcm_vers() {
 				origin_of(AccountId::from(ALICE)),
 				CurrencyId::ForeignAsset(source_id),
 				100_000_000_000_000,
-				Box::new(xcm::VersionedMultiLocation::V3(dest)),
+				Box::new(xcm::VersionedLocation::V4(dest)),
 				WeightLimit::Limited(4000000000.into())
 			));
 		})
@@ -1665,7 +1635,7 @@ fn root_can_change_default_xcm_vers() {
 #[test]
 fn asset_can_be_registered() {
 	ExtBuilder::default().build().execute_with(|| {
-		let source_location = AssetType::Xcm(MultiLocation::parent());
+		let source_location = AssetType::Xcm(xcm::v3::Location::parent());
 		let source_id: moonriver_runtime::AssetId = source_location.clone().into();
 		let asset_metadata = AssetRegistrarMetadata {
 			name: b"RelayToken".to_vec(),
@@ -1685,479 +1655,10 @@ fn asset_can_be_registered() {
 }
 
 #[test]
-fn local_assets_cannot_be_create_by_signed_origins() {
-	ExtBuilder::default()
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR * SUPPLY_FACTOR),
-			(AccountId::from(BOB), 1_000 * MOVR * SUPPLY_FACTOR),
-		])
-		.build()
-		.execute_with(|| {
-			assert_noop!(
-				RuntimeCall::LocalAssets(
-					pallet_assets::Call::<Runtime, LocalAssetInstance>::create {
-						id: 11u128.into(),
-						admin: AccountId::from(ALICE),
-						min_balance: 1u128
-					}
-				)
-				.dispatch(<Runtime as frame_system::Config>::RuntimeOrigin::signed(
-					AccountId::from(ALICE)
-				)),
-				frame_system::Error::<Runtime>::CallFiltered
-			);
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_supply_and_balance() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.build()
-		.execute_with(|| {
-			// Assert the asset has been created with the correct supply
-			assert_eq!(LocalAssets::total_supply(0u128), 1_000 * MOVR);
-
-			// Convert the assetId to its corresponding precompile address
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// The expected result for both total supply and balance of is the same, as only Alice
-			// holds balance.
-
-			// Access totalSupply through precompile.
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::total_supply {},
-				)
-				.expect_cost(3000)
-				.expect_no_logs()
-				.execute_returns(U256::from(1000 * MOVR));
-
-			// Access balanceOf through precompile
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
-						who: Address(ALICE.into()),
-					},
-				)
-				.expect_cost(3000)
-				.expect_no_logs()
-				.execute_returns(U256::from(1000 * MOVR));
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_transfer() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Transfer tokens from Aice to Bob, 400 MOVR.
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::transfer {
-						to: Address(BOB.into()),
-						value: { 400 * MOVR }.into(),
-					},
-				)
-				.expect_cost(25775)
-				.expect_log(log3(
-					asset_precompile_address,
-					SELECTOR_LOG_TRANSFER,
-					H160::from(ALICE),
-					H160::from(BOB),
-					solidity::encode_event_data(U256::from(400 * MOVR)),
-				))
-				.execute_returns(true);
-
-			// Make sure BOB has 400 MOVR
-			Precompiles::new()
-				.prepare_test(
-					BOB,
-					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
-						who: Address(BOB.into()),
-					},
-				)
-				.expect_cost(3000)
-				.expect_no_logs()
-				.execute_returns(U256::from(400 * MOVR));
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_approve() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Aprove Bob for spending 400 MOVR from Alice
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::approve {
-						spender: Address(BOB.into()),
-						value: { 400 * MOVR }.into(),
-					},
-				)
-				.expect_cost(16048)
-				.expect_log(log3(
-					asset_precompile_address,
-					SELECTOR_LOG_APPROVAL,
-					H160::from(ALICE),
-					H160::from(BOB),
-					solidity::encode_event_data(U256::from(400 * MOVR)),
-				))
-				.execute_returns(true);
-
-			// Transfer tokens from Alice to Charlie by using BOB as origin
-			Precompiles::new()
-				.prepare_test(
-					BOB,
-					asset_precompile_address,
-					LocalAssetsPCall::transfer_from {
-						from: Address(ALICE.into()),
-						to: Address(CHARLIE.into()),
-						value: { 400 * MOVR }.into(),
-					},
-				)
-				.expect_cost(33145)
-				.expect_log(log3(
-					asset_precompile_address,
-					SELECTOR_LOG_TRANSFER,
-					H160::from(ALICE),
-					H160::from(CHARLIE),
-					solidity::encode_event_data(U256::from(400 * MOVR)),
-				))
-				.execute_returns(true);
-
-			// Make sure CHARLIE has 400 MOVR
-			Precompiles::new()
-				.prepare_test(
-					CHARLIE,
-					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
-						who: Address(CHARLIE.into()),
-					},
-				)
-				.expect_cost(3000)
-				.expect_no_logs()
-				.execute_returns(U256::from(400 * MOVR));
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_mint_burn() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Mint 1000 MOVRS to BOB
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::mint {
-						to: Address(BOB.into()),
-						value: { 1000 * MOVR }.into(),
-					},
-				)
-				.expect_cost(14932)
-				.expect_log(log3(
-					asset_precompile_address,
-					SELECTOR_LOG_TRANSFER,
-					H160::default(),
-					H160::from(BOB),
-					solidity::encode_event_data(U256::from(1_000 * MOVR)),
-				))
-				.execute_returns(true);
-
-			// Assert the asset has been minted
-			assert_eq!(LocalAssets::total_supply(0u128), 2_000 * MOVR);
-			assert_eq!(
-				LocalAssets::balance(0u128, AccountId::from(BOB)),
-				1_000 * MOVR
-			);
-
-			// Burn tokens
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::burn {
-						from: Address(BOB.into()),
-						value: { 500 * MOVR }.into(),
-					},
-				)
-				.expect_cost(15172)
-				.expect_log(log3(
-					asset_precompile_address,
-					SELECTOR_LOG_TRANSFER,
-					H160::from(BOB),
-					H160::default(),
-					solidity::encode_event_data(U256::from(500 * MOVR)),
-				))
-				.execute_returns(true);
-
-			// Assert the asset has been burnt
-			assert_eq!(LocalAssets::total_supply(0u128), 1_500 * MOVR);
-			assert_eq!(
-				LocalAssets::balance(0u128, AccountId::from(BOB)),
-				500 * MOVR
-			);
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_freeze_thaw_account() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Freeze Account
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::freeze {
-						account: Address(ALICE.into()),
-					},
-				)
-				.expect_cost(8783)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// Assert account is frozen
-			assert_eq!(
-				LocalAssets::can_withdraw(0u128, &AccountId::from(ALICE), 1).into_result(),
-				Err(TokenError::Frozen.into())
-			);
-
-			// Thaw Account
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::thaw {
-						account: Address(ALICE.into()),
-					},
-				)
-				.expect_cost(8803)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// Assert account is not frozen
-			assert!(LocalAssets::can_withdraw(0u128, &AccountId::from(ALICE), 1)
-				.into_result()
-				.is_ok());
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_freeze_thaw_asset() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Freeze Asset
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::freeze_asset {},
-				)
-				.expect_cost(7623)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// Assert account is frozen
-			assert_eq!(
-				LocalAssets::can_withdraw(0u128, &AccountId::from(ALICE), 1).into_result(),
-				Err(TokenError::Frozen.into())
-			);
-
-			// Thaw Asset
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::thaw_asset {},
-				)
-				.expect_cost(7634)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// Assert account is not frozen
-			assert!(LocalAssets::can_withdraw(0u128, &AccountId::from(ALICE), 1)
-				.into_result()
-				.is_ok());
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_freeze_transfer_ownership() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Transfer ownerhsip of an asset
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::transfer_ownership {
-						owner: Address(BOB.into()),
-					},
-				)
-				.expect_cost(8706)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// No clear way of testing BOB is new owner, other than doing a priviledged function
-			// e.g., transfer_ownership again
-			assert_ok!(LocalAssets::transfer_ownership(
-				origin_of(AccountId::from(BOB)),
-				0u128.into(),
-				AccountId::from(ALICE)
-			));
-		});
-}
-
-#[test]
-fn asset_erc20_precompiles_freeze_set_team() {
-	ExtBuilder::default()
-		.with_local_assets(vec![(
-			0u128,
-			vec![(AccountId::from(ALICE), 1_000 * MOVR)],
-			AccountId::from(ALICE),
-		)])
-		.with_balances(vec![
-			(AccountId::from(ALICE), 2_000 * MOVR),
-			(AccountId::from(BOB), 1_000 * MOVR),
-		])
-		.build()
-		.execute_with(|| {
-			let asset_precompile_address =
-				Runtime::asset_id_to_account(LOCAL_ASSET_PRECOMPILE_ADDRESS_PREFIX, 0u128);
-
-			// Set Bob as issuer, admin and freezer
-			Precompiles::new()
-				.prepare_test(
-					ALICE,
-					asset_precompile_address,
-					LocalAssetsPCall::set_team {
-						admin: Address(BOB.into()),
-						issuer: Address(BOB.into()),
-						freezer: Address(BOB.into()),
-					},
-				)
-				.expect_cost(7657)
-				.expect_no_logs()
-				.execute_returns(true);
-
-			// Bob should be able to mint, freeze, and thaw
-			assert_ok!(LocalAssets::mint(
-				origin_of(AccountId::from(BOB)),
-				0u128.into(),
-				AccountId::from(BOB),
-				1_000 * MOVR
-			));
-			assert_ok!(LocalAssets::freeze(
-				origin_of(AccountId::from(BOB)),
-				0u128.into(),
-				AccountId::from(ALICE)
-			));
-			assert_ok!(LocalAssets::thaw(
-				origin_of(AccountId::from(BOB)),
-				0u128.into(),
-				AccountId::from(ALICE)
-			));
-		});
-}
-
-#[test]
 fn xcm_asset_erc20_precompiles_supply_and_balance() {
 	ExtBuilder::default()
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2174,7 +1675,7 @@ fn xcm_asset_erc20_precompiles_supply_and_balance() {
 		.build()
 		.execute_with(|| {
 			// We have the assetId that corresponds to the relay chain registered
-			let relay_asset_id: AssetId = AssetType::Xcm(MultiLocation::parent()).into();
+			let relay_asset_id: AssetId = AssetType::Xcm(xcm::v3::Location::parent()).into();
 
 			// Its address is
 			let asset_precompile_address = Runtime::asset_id_to_account(
@@ -2183,14 +1684,17 @@ fn xcm_asset_erc20_precompiles_supply_and_balance() {
 			);
 
 			// Assert the asset has been created with the correct supply
-			assert_eq!(Assets::total_supply(relay_asset_id), 1_000 * MOVR);
+			assert_eq!(
+				moonriver_runtime::Assets::total_supply(relay_asset_id),
+				1_000 * MOVR
+			);
 
 			// Access totalSupply through precompile. Important that the context is correct
 			Precompiles::new()
 				.prepare_test(
 					ALICE,
 					asset_precompile_address,
-					LocalAssetsPCall::total_supply {},
+					ForeignAssetsPCall::total_supply {},
 				)
 				.expect_cost(2000)
 				.expect_no_logs()
@@ -2201,7 +1705,7 @@ fn xcm_asset_erc20_precompiles_supply_and_balance() {
 				.prepare_test(
 					ALICE,
 					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
+					ForeignAssetsPCall::balance_of {
 						who: Address(ALICE.into()),
 					},
 				)
@@ -2215,7 +1719,7 @@ fn xcm_asset_erc20_precompiles_supply_and_balance() {
 fn xcm_asset_erc20_precompiles_transfer() {
 	ExtBuilder::default()
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2232,7 +1736,7 @@ fn xcm_asset_erc20_precompiles_transfer() {
 		.build()
 		.execute_with(|| {
 			// We have the assetId that corresponds to the relay chain registered
-			let relay_asset_id: AssetId = AssetType::Xcm(MultiLocation::parent()).into();
+			let relay_asset_id: AssetId = AssetType::Xcm(xcm::v3::Location::parent()).into();
 
 			// Its address is
 			let asset_precompile_address = Runtime::asset_id_to_account(
@@ -2245,12 +1749,12 @@ fn xcm_asset_erc20_precompiles_transfer() {
 				.prepare_test(
 					ALICE,
 					asset_precompile_address,
-					LocalAssetsPCall::transfer {
+					ForeignAssetsPCall::transfer {
 						to: Address(BOB.into()),
 						value: { 400 * MOVR }.into(),
 					},
 				)
-				.expect_cost(24775)
+				.expect_cost(24342)
 				.expect_log(log3(
 					asset_precompile_address,
 					SELECTOR_LOG_TRANSFER,
@@ -2265,7 +1769,7 @@ fn xcm_asset_erc20_precompiles_transfer() {
 				.prepare_test(
 					BOB,
 					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
+					ForeignAssetsPCall::balance_of {
 						who: Address(BOB.into()),
 					},
 				)
@@ -2279,7 +1783,7 @@ fn xcm_asset_erc20_precompiles_transfer() {
 fn xcm_asset_erc20_precompiles_approve() {
 	ExtBuilder::default()
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2296,7 +1800,7 @@ fn xcm_asset_erc20_precompiles_approve() {
 		.build()
 		.execute_with(|| {
 			// We have the assetId that corresponds to the relay chain registered
-			let relay_asset_id: AssetId = AssetType::Xcm(MultiLocation::parent()).into();
+			let relay_asset_id: AssetId = AssetType::Xcm(xcm::v3::Location::parent()).into();
 
 			// Its address is
 			let asset_precompile_address = Runtime::asset_id_to_account(
@@ -2309,12 +1813,12 @@ fn xcm_asset_erc20_precompiles_approve() {
 				.prepare_test(
 					ALICE,
 					asset_precompile_address,
-					LocalAssetsPCall::approve {
+					ForeignAssetsPCall::approve {
 						spender: Address(BOB.into()),
 						value: { 400 * MOVR }.into(),
 					},
 				)
-				.expect_cost(15048)
+				.expect_cost(14424)
 				.expect_log(log3(
 					asset_precompile_address,
 					SELECTOR_LOG_APPROVAL,
@@ -2329,13 +1833,13 @@ fn xcm_asset_erc20_precompiles_approve() {
 				.prepare_test(
 					BOB,
 					asset_precompile_address,
-					LocalAssetsPCall::transfer_from {
+					ForeignAssetsPCall::transfer_from {
 						from: Address(ALICE.into()),
 						to: Address(CHARLIE.into()),
 						value: { 400 * MOVR }.into(),
 					},
 				)
-				.expect_cost(32145)
+				.expect_cost(29686)
 				.expect_log(log3(
 					asset_precompile_address,
 					SELECTOR_LOG_TRANSFER,
@@ -2350,7 +1854,7 @@ fn xcm_asset_erc20_precompiles_approve() {
 				.prepare_test(
 					CHARLIE,
 					asset_precompile_address,
-					LocalAssetsPCall::balance_of {
+					ForeignAssetsPCall::balance_of {
 						who: Address(CHARLIE.into()),
 					},
 				)
@@ -2364,7 +1868,7 @@ fn xcm_asset_erc20_precompiles_approve() {
 fn xtokens_precompiles_transfer() {
 	ExtBuilder::default()
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2385,7 +1889,7 @@ fn xtokens_precompiles_transfer() {
 
 			// We have the assetId that corresponds to the relay chain registered
 			let relay_asset_id: moonriver_runtime::AssetId =
-				AssetType::Xcm(MultiLocation::parent()).into();
+				AssetType::Xcm(xcm::v3::Location::parent()).into();
 
 			// Its address is
 			let asset_precompile_address = Runtime::asset_id_to_account(
@@ -2394,12 +1898,12 @@ fn xtokens_precompiles_transfer() {
 			);
 
 			// Alice has 1000 tokens. She should be able to send through precompile
-			let destination = MultiLocation::new(
+			let destination = Location::new(
 				1,
-				Junctions::X1(Junction::AccountId32 {
+				[Junction::AccountId32 {
 					network: None,
 					id: [1u8; 32],
-				}),
+				}],
 			);
 
 			// We use the address of the asset as an identifier of the asset we want to transferS
@@ -2424,7 +1928,7 @@ fn xtokens_precompiles_transfer() {
 fn xtokens_precompiles_transfer_multiasset() {
 	ExtBuilder::default()
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2444,12 +1948,12 @@ fn xtokens_precompiles_transfer_multiasset() {
 			let xtokens_precompile_address = H160::from_low_u64_be(2052);
 
 			// Alice has 1000 tokens. She should be able to send through precompile
-			let destination = MultiLocation::new(
+			let destination = Location::new(
 				1,
-				Junctions::X1(Junction::AccountId32 {
+				[Junction::AccountId32 {
 					network: None,
 					id: [1u8; 32],
-				}),
+				}],
 			);
 
 			// This time we transfer it through TransferMultiAsset
@@ -2460,7 +1964,7 @@ fn xtokens_precompiles_transfer_multiasset() {
 					xtokens_precompile_address,
 					XtokensPCall::transfer_multiasset {
 						// We want to transfer the relay token
-						asset: MultiLocation::parent(),
+						asset: Location::parent(),
 						amount: 500_000_000_000_000u128.into(),
 						destination,
 						weight: 4_000_000,
@@ -2486,24 +1990,25 @@ fn make_sure_polkadot_xcm_cannot_be_called() {
 		)])
 		.build()
 		.execute_with(|| {
-			let dest = MultiLocation {
+			let dest = Location {
 				parents: 1,
-				interior: X1(AccountId32 {
+				interior: [AccountId32 {
 					network: None,
 					id: [1u8; 32],
-				}),
+				}]
+				.into(),
 			};
-			let multiassets: MultiAssets = [MultiAsset {
-				id: Concrete(moonriver_runtime::xcm_config::SelfLocation::get()),
+			let assets: Assets = [Asset {
+				id: AssetId(moonriver_runtime::xcm_config::SelfLocation::get()),
 				fun: Fungible(1000),
 			}]
 			.to_vec()
 			.into();
 			assert_noop!(
 				RuntimeCall::PolkadotXcm(pallet_xcm::Call::<Runtime>::reserve_transfer_assets {
-					dest: Box::new(VersionedMultiLocation::V3(dest.clone())),
-					beneficiary: Box::new(VersionedMultiLocation::V3(dest)),
-					assets: Box::new(VersionedMultiAssets::V3(multiassets)),
+					dest: Box::new(VersionedLocation::V4(dest.clone())),
+					beneficiary: Box::new(VersionedLocation::V4(dest)),
+					assets: Box::new(VersionedAssets::V4(assets)),
 					fee_asset_item: 0,
 				})
 				.dispatch(<Runtime as frame_system::Config>::RuntimeOrigin::signed(
@@ -2522,7 +2027,7 @@ fn transactor_cannot_use_more_than_max_weight() {
 			(AccountId::from(BOB), 1_000 * MOVR),
 		])
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2534,7 +2039,7 @@ fn transactor_cannot_use_more_than_max_weight() {
 		}])
 		.build()
 		.execute_with(|| {
-			let source_location = AssetType::Xcm(MultiLocation::parent());
+			let source_location = AssetType::Xcm(xcm::v3::Location::parent());
 			let source_id: moonriver_runtime::AssetId = source_location.clone().into();
 			assert_ok!(XcmTransactor::register(
 				root_origin(),
@@ -2545,7 +2050,7 @@ fn transactor_cannot_use_more_than_max_weight() {
 			// Root can set transact info
 			assert_ok!(XcmTransactor::set_transact_info(
 				root_origin(),
-				Box::new(xcm::VersionedMultiLocation::V3(MultiLocation::parent())),
+				Box::new(xcm::VersionedLocation::V4(Location::parent())),
 				// Relay charges 1000 for every instruction, and we have 3, so 3000
 				3000.into(),
 				20000.into(),
@@ -2555,7 +2060,7 @@ fn transactor_cannot_use_more_than_max_weight() {
 			// Root can set transact info
 			assert_ok!(XcmTransactor::set_fee_per_second(
 				root_origin(),
-				Box::new(xcm::VersionedMultiLocation::V3(MultiLocation::parent())),
+				Box::new(xcm::VersionedLocation::V4(Location::parent())),
 				1
 			));
 
@@ -2565,9 +2070,9 @@ fn transactor_cannot_use_more_than_max_weight() {
 					moonriver_runtime::xcm_config::Transactors::Relay,
 					0,
 					CurrencyPayment {
-						currency: Currency::AsMultiLocation(Box::new(
-							xcm::VersionedMultiLocation::V3(MultiLocation::parent())
-						)),
+						currency: Currency::AsMultiLocation(Box::new(xcm::VersionedLocation::V4(
+							Location::parent()
+						))),
 						fee_amount: None
 					},
 					vec![],
@@ -2575,7 +2080,8 @@ fn transactor_cannot_use_more_than_max_weight() {
 					TransactWeights {
 						transact_required_weight_at_most: 17001.into(),
 						overall_weight: None
-					}
+					},
+					false
 				),
 				pallet_xcm_transactor::Error::<Runtime>::MaxWeightTransactReached
 			);
@@ -2593,7 +2099,8 @@ fn transactor_cannot_use_more_than_max_weight() {
 					TransactWeights {
 						transact_required_weight_at_most: 17001.into(),
 						overall_weight: None
-					}
+					},
+					false
 				),
 				pallet_xcm_transactor::Error::<Runtime>::MaxWeightTransactReached
 			);
@@ -2611,9 +2118,9 @@ fn transact_through_signed_precompile_works_v2() {
 		.build()
 		.execute_with(|| {
 			// Destination
-			let dest = MultiLocation::parent();
+			let dest = Location::parent();
 
-			let fee_payer_asset = MultiLocation::parent();
+			let fee_payer_asset = Location::parent();
 
 			let bytes = vec![1u8, 2u8, 3u8];
 
@@ -2634,7 +2141,7 @@ fn transact_through_signed_precompile_works_v2() {
 						overall_weight: total_weight,
 					},
 				)
-				.expect_cost(18737)
+				.expect_cost(17555)
 				.expect_no_logs()
 				.execute_returns(());
 		});
@@ -2651,9 +2158,9 @@ fn transact_through_signed_cannot_send_to_local_chain() {
 		.build()
 		.execute_with(|| {
 			// Destination
-			let dest = MultiLocation::here();
+			let dest = Location::here();
 
-			let fee_payer_asset = MultiLocation::parent();
+			let fee_payer_asset = Location::parent();
 
 			let bytes = vec![1u8, 2u8, 3u8];
 
@@ -2692,7 +2199,7 @@ fn call_xtokens_with_fee() {
 		])
 		.with_safe_xcm_version(2)
 		.with_xcm_assets(vec![XcmAssetInitialization {
-			asset_type: AssetType::Xcm(MultiLocation::parent()),
+			asset_type: AssetType::Xcm(xcm::v3::Location::parent()),
 			metadata: AssetRegistrarMetadata {
 				name: b"RelayToken".to_vec(),
 				symbol: b"Relay".to_vec(),
@@ -2704,17 +2211,19 @@ fn call_xtokens_with_fee() {
 		}])
 		.build()
 		.execute_with(|| {
-			let source_location = AssetType::Xcm(MultiLocation::parent());
-			let dest = MultiLocation {
+			let source_location = AssetType::Xcm(xcm::v3::Location::parent());
+			let dest = Location {
 				parents: 1,
-				interior: X1(AccountId32 {
+				interior: [AccountId32 {
 					network: None,
 					id: [1u8; 32],
-				}),
+				}]
+				.into(),
 			};
 			let source_id: moonriver_runtime::AssetId = source_location.clone().into();
 
-			let before_balance = Assets::balance(source_id, &AccountId::from(ALICE));
+			let before_balance =
+				moonriver_runtime::Assets::balance(source_id, &AccountId::from(ALICE));
 
 			// We are able to transfer with fee
 			assert_ok!(XTokens::transfer_with_fee(
@@ -2722,11 +2231,12 @@ fn call_xtokens_with_fee() {
 				CurrencyId::ForeignAsset(source_id),
 				100_000_000_000_000,
 				100,
-				Box::new(xcm::VersionedMultiLocation::V3(dest.clone())),
+				Box::new(xcm::VersionedLocation::V4(dest.clone())),
 				WeightLimit::Limited(4000000000.into())
 			),);
 
-			let after_balance = Assets::balance(source_id, &AccountId::from(ALICE));
+			let after_balance =
+				moonriver_runtime::Assets::balance(source_id, &AccountId::from(ALICE));
 			// At least these much (plus fees) should have been charged
 			assert_eq!(before_balance - 100_000_000_000_000 - 100, after_balance);
 		});
@@ -2737,7 +2247,7 @@ fn test_xcm_utils_ml_tp_account() {
 	ExtBuilder::default().build().execute_with(|| {
 		let xcm_utils_precompile_address = H160::from_low_u64_be(2060);
 		let expected_address_parent: H160 =
-			ParentIsPreset::<AccountId>::convert_ref(MultiLocation::parent())
+			ParentIsPreset::<AccountId>::convert_location(&Location::parent())
 				.unwrap()
 				.into();
 
@@ -2746,17 +2256,17 @@ fn test_xcm_utils_ml_tp_account() {
 				ALICE,
 				xcm_utils_precompile_address,
 				XcmUtilsPCall::multilocation_to_address {
-					multilocation: MultiLocation::parent(),
+					location: Location::parent(),
 				},
 			)
 			.expect_cost(1000)
 			.expect_no_logs()
 			.execute_returns(Address(expected_address_parent));
 
-		let parachain_2000_multilocation = MultiLocation::new(1, X1(Parachain(2000)));
+		let parachain_2000_multilocation = Location::new(1, [Parachain(2000)]);
 		let expected_address_parachain: H160 =
-			SiblingParachainConvertsVia::<Sibling, AccountId>::convert_ref(
-				parachain_2000_multilocation.clone(),
+			SiblingParachainConvertsVia::<Sibling, AccountId>::convert_location(
+				&parachain_2000_multilocation,
 			)
 			.unwrap()
 			.into();
@@ -2766,27 +2276,28 @@ fn test_xcm_utils_ml_tp_account() {
 				ALICE,
 				xcm_utils_precompile_address,
 				XcmUtilsPCall::multilocation_to_address {
-					multilocation: parachain_2000_multilocation,
+					location: parachain_2000_multilocation,
 				},
 			)
 			.expect_cost(1000)
 			.expect_no_logs()
 			.execute_returns(Address(expected_address_parachain));
 
-		let alice_in_parachain_2000_multilocation = MultiLocation::new(
+		let alice_in_parachain_2000_location = Location::new(
 			1,
-			X2(
+			[
 				Parachain(2000),
 				AccountKey20 {
 					network: None,
 					key: ALICE,
 				},
-			),
+			],
 		);
-		let expected_address_alice_in_parachain_2000: H160 =
-			xcm_builder::HashedDescriptionDescribeFamilyAllTerminal::<AccountId>::convert_ref(
-				alice_in_parachain_2000_multilocation.clone(),
-			)
+		let expected_address_alice_in_parachain_2000 =
+			xcm_builder::HashedDescription::<
+				AccountId,
+				xcm_builder::DescribeFamily<xcm_builder::DescribeAllTerminal>,
+			>::convert_location(&alice_in_parachain_2000_location)
 			.unwrap()
 			.into();
 
@@ -2795,7 +2306,7 @@ fn test_xcm_utils_ml_tp_account() {
 				ALICE,
 				xcm_utils_precompile_address,
 				XcmUtilsPCall::multilocation_to_address {
-					multilocation: alice_in_parachain_2000_multilocation,
+					location: alice_in_parachain_2000_location,
 				},
 			)
 			.expect_cost(1000)
@@ -2811,7 +2322,7 @@ fn test_xcm_utils_weight_message() {
 		let expected_weight =
 			XcmWeight::<moonriver_runtime::Runtime, RuntimeCall>::clear_origin().ref_time();
 
-		let message: Vec<u8> = xcm::VersionedXcm::<()>::V3(Xcm(vec![ClearOrigin])).encode();
+		let message: Vec<u8> = xcm::VersionedXcm::<()>::V4(Xcm(vec![ClearOrigin])).encode();
 
 		let input = XcmUtilsPCall::weight_message {
 			message: message.into(),
@@ -2829,9 +2340,9 @@ fn test_xcm_utils_weight_message() {
 fn test_xcm_utils_get_units_per_second() {
 	ExtBuilder::default().build().execute_with(|| {
 		let xcm_utils_precompile_address = H160::from_low_u64_be(2060);
-		let multilocation = SelfReserve::get();
+		let location = SelfReserve::get();
 
-		let input = XcmUtilsPCall::get_units_per_second { multilocation };
+		let input = XcmUtilsPCall::get_units_per_second { location };
 
 		let expected_units =
 			WEIGHT_REF_TIME_PER_SECOND as u128 * moonriver_runtime::currency::WEIGHT_FEE;
@@ -2851,7 +2362,7 @@ fn precompile_existence() {
 		let precompile_addresses: std::collections::BTreeSet<_> = vec![
 			1, 2, 3, 4, 5, 6, 7, 8, 9, 1024, 1025, 1026, 2048, 2049, 2050, 2051, 2052, 2053, 2054,
 			2055, 2056, 2057, 2058, 2059, 2060, 2061, 2062, 2063, 2064, 2065, 2066, 2067, 2068,
-			2069, 2070,
+			2069, 2070, 2071, 2072, 2073,
 		]
 		.into_iter()
 		.map(H160::from_low_u64_be)
@@ -2911,7 +2422,7 @@ fn precompile_existence() {
 fn removed_precompiles() {
 	ExtBuilder::default().build().execute_with(|| {
 		let precompiles = Precompiles::new();
-		let removed_precompiles = [1025];
+		let removed_precompiles = [1025, 2051, 2062, 2063];
 
 		for i in 1..3000 {
 			let address = H160::from_low_u64_be(i);
@@ -2950,32 +2461,40 @@ fn removed_precompiles() {
 fn deal_with_fees_handles_tip() {
 	use frame_support::traits::OnUnbalanced;
 	use moonriver_runtime::{DealWithFees, Treasury};
-	use pallet_balances::NegativeImbalance;
 
-	ExtBuilder::default()
-		.with_balances(vec![(AccountId::from(ALICE), 10_000)])
-		.build()
-		.execute_with(|| {
-			// Alice has 10_000, which makes inital supply 10_000.
-			// drop()ing the NegativeImbalance below will cause the total_supply to be decreased
-			// incorrectly (since there was never a withdraw to begin with), which in this case has
-			// the desired effect of showing that currency was burned.
-			let total_supply_before = Balances::total_issuance();
-			assert_eq!(total_supply_before, 10_000);
+	ExtBuilder::default().build().execute_with(|| {
+		// This test checks the functionality of the `DealWithFees` trait implementation in the runtime.
+		// It simulates a scenario where a fee and a tip are issued to an account and ensures that the
+		// treasury receives the correct amount (20% of the total), and the rest is burned (80%).
+		//
+		// The test follows these steps:
+		// 1. It issues a fee of 100 and a tip of 1000.
+		// 2. It checks the total supply before the fee and tip are dealt with, which should be 1_100.
+		// 3. It checks that the treasury's balance is initially 0.
+		// 4. It calls `DealWithFees::on_unbalanceds` with the fee and tip.
+		// 5. It checks that the treasury's balance is now 220 (20% of the fee and tip).
+		// 6. It checks that the total supply has decreased by 880 (80% of the fee and tip), indicating
+		//    that this amount was burned.
+		let fee = <pallet_balances::Pallet<Runtime> as frame_support::traits::fungible::Balanced<
+			AccountId,
+		>>::issue(100);
+		let tip = <pallet_balances::Pallet<Runtime> as frame_support::traits::fungible::Balanced<
+			AccountId,
+		>>::issue(1000);
 
-			let fees_then_tips = vec![
-				NegativeImbalance::<moonriver_runtime::Runtime>::new(100),
-				NegativeImbalance::<moonriver_runtime::Runtime>::new(1_000),
-			];
-			DealWithFees::on_unbalanceds(fees_then_tips.into_iter());
+		let total_supply_before = Balances::total_issuance();
+		assert_eq!(total_supply_before, 1_100);
+		assert_eq!(Balances::free_balance(&Treasury::account_id()), 0);
 
-			// treasury should have received 20%
-			assert_eq!(Balances::free_balance(&Treasury::account_id()), 220);
+		DealWithFees::on_unbalanceds(vec![fee, tip].into_iter());
 
-			// verify 80% burned
-			let total_supply_after = Balances::total_issuance();
-			assert_eq!(total_supply_before - total_supply_after, 880);
-		});
+		// treasury should have received 20%
+		assert_eq!(Balances::free_balance(&Treasury::account_id()), 220);
+
+		// verify 80% burned
+		let total_supply_after = Balances::total_issuance();
+		assert_eq!(total_supply_before - total_supply_after, 880);
+	});
 }
 
 #[test]
@@ -3061,23 +2580,24 @@ fn evm_success_keeps_substrate_events() {
 #[cfg(test)]
 mod fee_tests {
 	use super::*;
+	use fp_evm::FeeCalculator;
 	use frame_support::{
-		traits::ConstU128,
+		traits::{ConstU128, OnFinalize},
 		weights::{ConstantMultiplier, WeightToFee},
 	};
 	use moonriver_runtime::{
 		currency, LengthToFee, MinimumMultiplier, RuntimeBlockWeights, SlowAdjustingFeeUpdate,
-		TargetBlockFullness, TransactionPayment,
+		TargetBlockFullness, TransactionPaymentAsGasPrice, NORMAL_WEIGHT, WEIGHT_PER_GAS,
 	};
 	use sp_core::Get;
-	use sp_runtime::FixedPointNumber;
+	use sp_runtime::{BuildStorage, FixedPointNumber, Perbill};
 
 	fn run_with_system_weight<F>(w: Weight, mut assertions: F)
 	where
 		F: FnMut() -> (),
 	{
-		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::default()
-			.build_storage::<Runtime>()
+		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
 			.unwrap()
 			.into();
 		t.execute_with(|| {
@@ -3125,8 +2645,8 @@ mod fee_tests {
 			+ LengthToFeeImpl::weight_to_fee(&(Weight::from_parts(extrinsic_len as u64, 1)))
 			+ tip;
 
-		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::default()
-			.build_storage::<Runtime>()
+		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
 			.unwrap()
 			.into();
 		t.execute_with(|| {
@@ -3146,6 +2666,132 @@ mod fee_tests {
 				actual_fee,
 				"The actual fee did not match the expected fee, diff {}",
 				actual_fee - expected_fee
+			);
+		});
+	}
+
+	#[test]
+	fn test_min_gas_price_is_deterministic() {
+		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
+			.unwrap()
+			.into();
+		t.execute_with(|| {
+			let multiplier = sp_runtime::FixedU128::from_u32(1);
+			pallet_transaction_payment::NextFeeMultiplier::<Runtime>::set(multiplier);
+			let actual = TransactionPaymentAsGasPrice::min_gas_price().0;
+			let expected: U256 = multiplier
+				.saturating_mul_int(currency::WEIGHT_FEE.saturating_mul(WEIGHT_PER_GAS as u128))
+				.into();
+
+			assert_eq!(expected, actual);
+		});
+	}
+
+	#[test]
+	fn test_min_gas_price_has_no_precision_loss_from_saturating_mul_int() {
+		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
+			.unwrap()
+			.into();
+		t.execute_with(|| {
+			let multiplier_1 = sp_runtime::FixedU128::from_float(0.999593900000000000);
+			let multiplier_2 = sp_runtime::FixedU128::from_float(0.999593200000000000);
+
+			pallet_transaction_payment::NextFeeMultiplier::<Runtime>::set(multiplier_1);
+			let a = TransactionPaymentAsGasPrice::min_gas_price();
+			pallet_transaction_payment::NextFeeMultiplier::<Runtime>::set(multiplier_2);
+			let b = TransactionPaymentAsGasPrice::min_gas_price();
+
+			assert_ne!(
+				a, b,
+				"both gas prices were equal, unexpected precision loss incurred"
+			);
+		});
+	}
+
+	#[test]
+	fn test_fee_scenarios() {
+		use sp_runtime::FixedU128;
+		let mut t: sp_io::TestExternalities = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
+			.unwrap()
+			.into();
+		t.execute_with(|| {
+			let weight_fee_per_gas = currency::WEIGHT_FEE.saturating_mul(WEIGHT_PER_GAS as u128);
+			let sim = |start_gas_price: u128, fullness: Perbill, num_blocks: u64| -> U256 {
+				let start_multiplier =
+					FixedU128::from_rational(start_gas_price, weight_fee_per_gas);
+				pallet_transaction_payment::NextFeeMultiplier::<Runtime>::set(start_multiplier);
+
+				let block_weight = NORMAL_WEIGHT * fullness;
+
+				for i in 0..num_blocks {
+					System::set_block_number(i as u32);
+					System::set_block_consumed_resources(block_weight, 0);
+					TransactionPayment::on_finalize(i as u32);
+				}
+
+				TransactionPaymentAsGasPrice::min_gas_price().0
+			};
+
+			// The expected values are the ones observed during test execution,
+			// they are expected to change when parameters that influence
+			// the fee calculation are changed, and should be updated accordingly.
+			// If a test fails when nothing specific to fees has changed,
+			// it may indicate an unexpected collateral effect and should be investigated
+
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(0), 1),
+				U256::from(1_250_000_000u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(25), 1),
+				U256::from(1_250_000_000u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(50), 1),
+				U256::from(1_250_750_225u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(100), 1),
+				U256::from(1_253_254_225u128),
+			);
+
+			// 1 "real" hour (at 6-second blocks)
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(0), 600),
+				U256::from(1_250_000_000u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(25), 600),
+				U256::from(1_250_000_000u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(50), 600),
+				U256::from(1_791_661_729u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(100), 600),
+				U256::from(5_948_516_121u128),
+			);
+
+			// 1 "real" day (at 6-second blocks)
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(0), 14400),
+				U256::from(1_250_000_000u128), // lower bound enforced
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(25), 14400),
+				U256::from(1_250_000_000u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(50), 14400),
+				U256::from(7_066_658_618_836u128),
+			);
+			assert_eq!(
+				sim(1_000_000_000, Perbill::from_percent(100), 14400),
+				U256::from(125_000_000_000_000u128), // upper bound enforced
 			);
 		});
 	}

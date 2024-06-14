@@ -1,28 +1,27 @@
 import "@moonbeam-network/api-augment";
 import { ApiDecoration } from "@polkadot/api/types";
-import { MultiLocation } from "@polkadot/types/interfaces";
 import { describeSuite, expect, beforeAll } from "@moonwall/cli";
 import { extractWeight } from "@moonwall/util";
 import { ApiPromise } from "@polkadot/api";
 
 describeSuite({
-  id: "S1800",
+  id: "S20",
   title: "Verify XCM weight fees for relay",
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let atBlockNumber: number = 0;
     let relayAtBlockNumber: number = 0;
-    let apiAt: ApiDecoration<"promise"> = null;
-    let relayApiAt: ApiDecoration<"promise"> = null;
+    let paraApiAt: ApiDecoration<"promise">;
+    let relayApiAt: ApiDecoration<"promise">;
     let paraApi: ApiPromise;
     let relayApi: ApiPromise;
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
-      relayApi = context.polkadotJs({ apiName: "relay" });
+      paraApi = context.polkadotJs("para");
+      relayApi = context.polkadotJs("relay");
 
       atBlockNumber = (await paraApi.rpc.chain.getHeader()).number.toNumber();
-      apiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
+      paraApiAt = await paraApi.at(await paraApi.rpc.chain.getBlockHash(atBlockNumber));
 
       relayAtBlockNumber = (await relayApi.rpc.chain.getHeader()).number.toNumber();
       relayApiAt = await relayApi.at(await relayApi.rpc.chain.getBlockHash(relayAtBlockNumber));
@@ -38,7 +37,7 @@ describeSuite({
 
         // skip test if runtime inconsistency. The storage is set for
         // specific runtimes, so does not make sense to compare non-matching runtimes
-        let skipTestRuntimeInconsistency =
+        const skipTestRuntimeInconsistency =
           (relayRuntime.startsWith("polkadot") && paraRuntime.startsWith("moonbeam")) ||
           (relayRuntime.startsWith("kusama") && paraRuntime.startsWith("moonriver")) ||
           (relayRuntime.startsWith("westend") && paraRuntime.startsWith("moonbase"))
@@ -49,10 +48,6 @@ describeSuite({
           log(`Relay and Para runtimes dont match, skipping test`);
           return;
         }
-        const relayMultiLocation: MultiLocation = paraApi.createType(
-          "MultiLocation",
-          JSON.parse('{ "parents": 1, "interior": "Here" }')
-        );
 
         const units = relayRuntime.startsWith("polkadot")
           ? 10_000_000_000n
@@ -85,13 +80,17 @@ describeSuite({
         let feePerSecondValueForRelay;
         if (parachainRuntime >= 1600) {
           feePerSecondValueForRelay = (
-            (await apiAt.query.xcmTransactor.destinationAssetFeePerSecond(
-              relayMultiLocation
-            )) as any
+            await paraApiAt.query.xcmTransactor.destinationAssetFeePerSecond({
+              parents: 1,
+              interior: "Here",
+            })
           ).unwrap();
         } else {
           feePerSecondValueForRelay = (
-            (await apiAt.query.xcmTransactor.transactInfoWithWeightLimit(relayMultiLocation)) as any
+            (await paraApiAt.query.xcmTransactor.transactInfoWithWeightLimit({
+              parents: 1,
+              interior: "Here",
+            })) as any
           ).unwrap().feePerSecond;
         }
         expect(
@@ -108,7 +107,7 @@ describeSuite({
         ).to.be.true;
 
         log(
-          `Verified feePerSecond for ${relayMultiLocation} transactInfos ` +
+          `Verified feePerSecond for relayMultiLocation transactInfos ` +
             `within relay base weight range`
         );
       },

@@ -20,13 +20,14 @@
 
 use fp_evm::PrecompileHandle;
 use frame_support::{
-	dispatch::{Dispatchable, GetDispatchInfo, PostDispatchInfo},
+	dispatch::{GetDispatchInfo, PostDispatchInfo},
 	traits::Currency,
 };
 use pallet_evm::AddressMapping;
 use precompile_utils::prelude::*;
 
 use sp_core::{H160, U256};
+use sp_runtime::traits::Dispatchable;
 use sp_std::{
 	convert::{TryFrom, TryInto},
 	fmt::Debug,
@@ -135,7 +136,7 @@ where
 		let origin = Runtime::AddressMapping::into_account_id(handle.context().caller);
 		let call = pallet_crowdloan_rewards::Call::<Runtime>::claim {};
 
-		RuntimeHelper::<Runtime>::try_dispatch(handle, Some(origin).into(), call)?;
+		RuntimeHelper::<Runtime>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(())
 	}
@@ -161,7 +162,7 @@ where
 		let call =
 			pallet_crowdloan_rewards::Call::<Runtime>::update_reward_address { new_reward_account };
 
-		RuntimeHelper::<Runtime>::try_dispatch(handle, Some(origin).into(), call)?;
+		RuntimeHelper::<Runtime>::try_dispatch(handle, Some(origin).into(), call, 0)?;
 
 		Ok(())
 	}

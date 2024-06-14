@@ -11,13 +11,30 @@
       "-lparachain=debug",
       "--database=paritydb"
     ],
+    "genesis": {
+      "runtimeGenesis": {
+        "patch": {
+          "configuration": {
+            "config": {
+              "scheduling_lookahead": 2,
+              "async_backing_params": {
+                "max_candidate_depth": 3,
+                "allowed_ancestry_len": 2
+              }
+            }
+          }
+        }
+      }
+    },
     "nodes": [
       {
         "name": "alice",
+        "ws_port": 33346,
         "validator": true
       },
       {
         "name": "bob",
+        "ws_port": 33347,
         "validator": true
       }
     ]
@@ -26,7 +43,7 @@
     {
       "id": 1000,
       "chain": "moonbase-local",
-      "chain_spec_path": "tmp/moonbase-raw-spec.json",
+      "chain_spec_path": "tmp/moonbase-modified-raw-spec.json",
       "collator": {
         "name": "alith",
         "ws_port": 33345,

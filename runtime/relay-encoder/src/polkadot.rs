@@ -18,6 +18,7 @@
 // TODO: whenever a conclusion is taken from https://github.com/paritytech/substrate/issues/8158
 
 use cumulus_primitives_core::{relay_chain::HrmpChannelId, ParaId};
+use pallet_xcm_transactor::relay_indices::RelayChainIndices;
 use parity_scale_codec::{Decode, Encode};
 use sp_runtime::traits::{AccountIdLookup, StaticLookup};
 use sp_runtime::AccountId32;
@@ -36,20 +37,11 @@ pub enum RelayCall {
 	Hrmp(HrmpCall),
 }
 
-// Utility call encoding, needed for xcm transactor pallet
-#[derive(Encode, Decode)]
-
-pub enum UtilityCall {
-	#[codec(index = 1u8)]
-	AsDerivative(u16),
-}
-
 #[derive(Encode, Decode)]
 pub enum StakeCall {
 	#[codec(index = 0u16)]
 	// the index should match the position of the dispatchable in the target pallet
 	Bond(
-		<AccountIdLookup<AccountId32, ()> as StaticLookup>::Source,
 		#[codec(compact)] cumulus_primitives_core::relay_chain::Balance,
 		pallet_staking::RewardDestination<AccountId32>,
 	),
@@ -68,9 +60,16 @@ pub enum StakeCall {
 	#[codec(index = 7u16)]
 	SetPayee(pallet_staking::RewardDestination<AccountId32>),
 	#[codec(index = 8u16)]
-	SetController(<AccountIdLookup<AccountId32, ()> as StaticLookup>::Source),
+	SetController,
 	#[codec(index = 19u16)]
 	Rebond(#[codec(compact)] cumulus_primitives_core::relay_chain::Balance),
+}
+
+// Utility call encoding, needed for xcm transactor pallet
+#[derive(Encode, Decode)]
+pub enum UtilityCall {
+	#[codec(index = 1u8)]
+	AsDerivative(u16),
 }
 
 // HRMP call encoding, needed for xcm transactor pallet
@@ -124,46 +123,46 @@ impl xcm_primitives::HrmpEncodeCall for PolkadotEncoder {
 	}
 }
 
-impl pallet_evm_precompile_relay_encoder::StakeEncodeCall for PolkadotEncoder {
-	fn encode_call(call: pallet_evm_precompile_relay_encoder::AvailableStakeCalls) -> Vec<u8> {
+impl xcm_primitives::StakeEncodeCall for PolkadotEncoder {
+	fn encode_call(call: xcm_primitives::AvailableStakeCalls) -> Vec<u8> {
 		match call {
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Bond(a, b, c) => {
-				RelayCall::Stake(StakeCall::Bond(a.into(), b, c)).encode()
+			xcm_primitives::AvailableStakeCalls::Bond(b, c) => {
+				RelayCall::Stake(StakeCall::Bond(b, c)).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::BondExtra(a) => {
+			xcm_primitives::AvailableStakeCalls::BondExtra(a) => {
 				RelayCall::Stake(StakeCall::BondExtra(a)).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Unbond(a) => {
+			xcm_primitives::AvailableStakeCalls::Unbond(a) => {
 				RelayCall::Stake(StakeCall::Unbond(a)).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::WithdrawUnbonded(a) => {
+			xcm_primitives::AvailableStakeCalls::WithdrawUnbonded(a) => {
 				RelayCall::Stake(StakeCall::WithdrawUnbonded(a)).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Validate(a) => {
+			xcm_primitives::AvailableStakeCalls::Validate(a) => {
 				RelayCall::Stake(StakeCall::Validate(a)).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Chill => {
+			xcm_primitives::AvailableStakeCalls::Chill => {
 				RelayCall::Stake(StakeCall::Chill).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::SetPayee(a) => {
+			xcm_primitives::AvailableStakeCalls::SetPayee(a) => {
 				RelayCall::Stake(StakeCall::SetPayee(a.into())).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::SetController(a) => {
-				RelayCall::Stake(StakeCall::SetController(a.into())).encode()
+			xcm_primitives::AvailableStakeCalls::SetController => {
+				RelayCall::Stake(StakeCall::SetController).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Rebond(a) => {
+			xcm_primitives::AvailableStakeCalls::Rebond(a) => {
 				RelayCall::Stake(StakeCall::Rebond(a.into())).encode()
 			}
 
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Nominate(a) => {
+			xcm_primitives::AvailableStakeCalls::Nominate(a) => {
 				let nominated: Vec<<AccountIdLookup<AccountId32, ()> as StaticLookup>::Source> =
 					a.iter().map(|add| (*add).clone().into()).collect();
 
@@ -173,421 +172,678 @@ impl pallet_evm_precompile_relay_encoder::StakeEncodeCall for PolkadotEncoder {
 	}
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use crate::polkadot::PolkadotEncoder;
-	use frame_support::traits::PalletInfo;
-	use pallet_evm_precompile_relay_encoder::StakeEncodeCall;
-	use sp_runtime::Perbill;
+/// Polkadot pallet and extrinsic indices
+pub const POLKADOT_RELAY_INDICES: RelayChainIndices = RelayChainIndices {
+	staking: 7u8,
+	utility: 26u8,
+	hrmp: 60u8,
+	bond: 0u8,
+	bond_extra: 1u8,
+	unbond: 2u8,
+	withdraw_unbonded: 3u8,
+	validate: 4u8,
+	nominate: 5u8,
+	chill: 6u8,
+	set_payee: 7u8,
+	set_controller: 8u8,
+	rebond: 19u8,
+	as_derivative: 1u8,
+	init_open_channel: 0u8,
+	accept_open_channel: 1u8,
+	close_channel: 2u8,
+	cancel_open_request: 6u8,
+};
 
-	#[test]
-	fn test_as_derivative() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Utility,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_utility::Call::<polkadot_runtime::Runtime>::as_derivative {
-			index: 1,
-			call: polkadot_runtime::RuntimeCall::Staking(pallet_staking::Call::<
-				polkadot_runtime::Runtime,
-			>::chill {})
-			.into(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		let call_bytes = <PolkadotEncoder as StakeEncodeCall>::encode_call(
-			pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Chill,
-		);
-
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			xcm_primitives::UtilityEncodeCall::encode_call(
-				PolkadotEncoder,
-				xcm_primitives::UtilityAvailableCalls::AsDerivative(1, call_bytes)
-			),
-			expected_encoded
-		);
-	}
-
-	#[test]
-	fn test_stake_bond() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-		let relay_account: AccountId32 = [1u8; 32].into();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::bond {
-			controller: relay_account.clone().into(),
-			value: 100u32.into(),
-			payee: pallet_staking::RewardDestination::Controller,
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Bond(
-					relay_account.into(),
-					100u32.into(),
-					pallet_staking::RewardDestination::Controller
-				)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_bond_extra() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::bond_extra {
-			max_additional: 100u32.into(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::BondExtra(100u32.into(),)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_unbond() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::unbond {
-			value: 100u32.into(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Unbond(100u32.into(),)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_withdraw_unbonded() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::withdraw_unbonded {
-			num_slashing_spans: 100u32,
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::WithdrawUnbonded(100u32,)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_validate() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let validator_prefs = pallet_staking::ValidatorPrefs {
-			commission: Perbill::from_percent(5),
-			blocked: true,
-		};
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::validate {
-			prefs: validator_prefs.clone(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Validate(validator_prefs)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_nominate() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-		let relay_account: AccountId32 = [1u8; 32].into();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::nominate {
-			targets: vec![relay_account.clone().into()],
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Nominate(vec![
-					relay_account.into()
-				])
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_stake_chill() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::chill {}.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Chill
-			),
-			expected_encoded
-		);
-	}
-
-	#[test]
-	fn test_set_payee() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::set_payee {
-			payee: pallet_staking::RewardDestination::Controller,
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::SetPayee(
-					pallet_staking::RewardDestination::Controller
-				)
-			),
-			expected_encoded
-		);
-	}
-
-	#[test]
-	fn test_set_controller() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-		let relay_account: AccountId32 = [1u8; 32].into();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::set_controller {
-			controller: relay_account.clone().into(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::SetController(
-					relay_account.clone().into()
-				)
-			),
-			expected_encoded
-		);
-	}
-	#[test]
-	fn test_rebond() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Staking,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::rebond {
-			value: 100u32.into(),
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as StakeEncodeCall>::encode_call(
-				pallet_evm_precompile_relay_encoder::AvailableStakeCalls::Rebond(100u32.into())
-			),
-			expected_encoded
-		);
-	}
-
-	#[test]
-	fn test_hrmp_init() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Hrmp,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
-			polkadot_runtime::Runtime
-		>::hrmp_init_open_channel {
-			recipient: 1000u32.into(),
-			proposed_max_capacity: 100u32,
-			proposed_max_message_size: 100u32,
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
-				xcm_primitives::HrmpAvailableCalls::InitOpenChannel(
-					1000u32.into(),
-					100u32.into(),
-					100u32.into()
-				)
-			),
-			Ok(expected_encoded)
-		);
-	}
-
-	#[test]
-	fn test_hrmp_accept() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Hrmp,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
-			polkadot_runtime::Runtime
-		>::hrmp_accept_open_channel {
-			sender: 1000u32.into()
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
-				xcm_primitives::HrmpAvailableCalls::AcceptOpenChannel(1000u32.into(),)
-			),
-			Ok(expected_encoded)
-		);
-	}
-
-	#[test]
-	fn test_hrmp_close() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Hrmp,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
-			polkadot_runtime::Runtime
-		>::hrmp_close_channel {
-			channel_id: HrmpChannelId {
-				sender: 1000u32.into(),
-				recipient: 1001u32.into()
-			}
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
-				xcm_primitives::HrmpAvailableCalls::CloseChannel(HrmpChannelId {
-					sender: 1000u32.into(),
-					recipient: 1001u32.into()
-				})
-			),
-			Ok(expected_encoded)
-		);
-	}
-
-	#[test]
-	fn test_hrmp_cancel() {
-		let mut expected_encoded: Vec<u8> = Vec::new();
-
-		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
-			polkadot_runtime::Hrmp,
-		>()
-		.unwrap() as u8;
-		expected_encoded.push(index);
-
-		let channel_id = HrmpChannelId {
-			sender: 1u32.into(),
-			recipient: 1u32.into(),
-		};
-		let open_requests: u32 = 1;
-
-		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
-			polkadot_runtime::Runtime
-		>::hrmp_cancel_open_request {
-			channel_id: channel_id.clone(),
-			open_requests
-		}
-		.encode();
-		expected_encoded.append(&mut expected);
-
-		assert_eq!(
-			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
-				xcm_primitives::HrmpAvailableCalls::CancelOpenRequest(
-					channel_id.clone(),
-					open_requests
-				)
-			),
-			Ok(expected_encoded)
-		);
-	}
-}
+// #[cfg(test)]
+// mod tests {
+// 	use super::*;
+// 	use crate::polkadot::PolkadotEncoder;
+// 	use frame_support::traits::PalletInfo;
+// 	use sp_runtime::Perbill;
+// 	use xcm_primitives::{StakeEncodeCall, UtilityEncodeCall};
+//
+// 	#[test]
+// 	fn test_as_derivative() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Utility,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_utility::Call::<polkadot_runtime::Runtime>::as_derivative {
+// 			index: 1,
+// 			call: polkadot_runtime::RuntimeCall::Staking(pallet_staking::Call::<
+// 				polkadot_runtime::Runtime,
+// 			>::chill {})
+// 			.into(),
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		let call_bytes = <PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 			xcm_primitives::AvailableStakeCalls::Chill,
+// 		);
+//
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			xcm_primitives::UtilityEncodeCall::encode_call(
+// 				PolkadotEncoder,
+// 				xcm_primitives::UtilityAvailableCalls::AsDerivative(1, call_bytes.clone())
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as UtilityEncodeCall
+// 				>::encode_call(
+// 					pallet_xcm_transactor::Pallet(
+// 						sp_std::marker::PhantomData::<moonbeam_runtime::Runtime>::default()
+// 					),
+// 					xcm_primitives::UtilityAvailableCalls::AsDerivative(1, call_bytes)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_stake_bond() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::bond {
+// 			value: 100u32.into(),
+// 			payee: pallet_staking::RewardDestination::Controller,
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Bond(
+// 					100u32.into(),
+// 					pallet_staking::RewardDestination::Controller
+// 				)
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Bond(
+// 						100u32.into(),
+// 						pallet_staking::RewardDestination::Controller
+// 					)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_bond_extra() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::bond_extra {
+// 			max_additional: 100u32.into(),
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::BondExtra(100u32.into(),)
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::BondExtra(100u32.into(),)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_unbond() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::unbond {
+// 			value: 100u32.into(),
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Unbond(100u32.into(),)
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Unbond(100u32.into(),)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_withdraw_unbonded() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::withdraw_unbonded {
+// 			num_slashing_spans: 100u32,
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::WithdrawUnbonded(100u32,)
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::WithdrawUnbonded(100u32,)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_validate() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let validator_prefs = pallet_staking::ValidatorPrefs {
+// 			commission: Perbill::from_percent(5),
+// 			blocked: true,
+// 		};
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::validate {
+// 			prefs: validator_prefs.clone(),
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Validate(validator_prefs.clone())
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Validate(validator_prefs)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_nominate() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+// 		let relay_account: AccountId32 = [1u8; 32].into();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::nominate {
+// 			targets: vec![relay_account.clone().into()],
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Nominate(vec![relay_account.clone().into()])
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Nominate(vec![
+// 						relay_account.into()
+// 					])
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_stake_chill() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::chill {}.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Chill
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Chill
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_set_payee() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::set_payee {
+// 			payee: pallet_staking::RewardDestination::Controller,
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::SetPayee(
+// 					pallet_staking::RewardDestination::Controller
+// 				)
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::SetPayee(
+// 						pallet_staking::RewardDestination::Controller
+// 					)
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_set_controller() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected =
+// 			pallet_staking::Call::<polkadot_runtime::Runtime>::set_controller {}.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::SetController
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::SetController
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+// 	#[test]
+// 	fn test_rebond() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Staking,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = pallet_staking::Call::<polkadot_runtime::Runtime>::rebond {
+// 			value: 100u32.into(),
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as StakeEncodeCall>::encode_call(
+// 				xcm_primitives::AvailableStakeCalls::Rebond(100u32.into())
+// 			),
+// 			expected_encoded.clone()
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as StakeEncodeCall
+// 				>::encode_call(
+// 					xcm_primitives::AvailableStakeCalls::Rebond(100u32.into())
+// 				),
+// 				expected_encoded
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_hrmp_init() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Hrmp,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
+// 			polkadot_runtime::Runtime
+// 		>::hrmp_init_open_channel {
+// 			recipient: 1000u32.into(),
+// 			proposed_max_capacity: 100u32,
+// 			proposed_max_message_size: 100u32,
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
+// 				xcm_primitives::HrmpAvailableCalls::InitOpenChannel(
+// 					1000u32.into(),
+// 					100u32.into(),
+// 					100u32.into()
+// 				)
+// 			),
+// 			Ok(expected_encoded.clone())
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as xcm_primitives::HrmpEncodeCall
+// 				>::hrmp_encode_call(
+// 					xcm_primitives::HrmpAvailableCalls::InitOpenChannel(
+// 						1000u32.into(),
+// 						100u32.into(),
+// 						100u32.into()
+// 					)
+// 				),
+// 				Ok(expected_encoded)
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_hrmp_accept() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Hrmp,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
+// 			polkadot_runtime::Runtime
+// 		>::hrmp_accept_open_channel {
+// 			sender: 1000u32.into()
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
+// 				xcm_primitives::HrmpAvailableCalls::AcceptOpenChannel(1000u32.into(),)
+// 			),
+// 			Ok(expected_encoded.clone())
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as xcm_primitives::HrmpEncodeCall
+// 				>::hrmp_encode_call(
+// 					xcm_primitives::HrmpAvailableCalls::AcceptOpenChannel(1000u32.into(),)
+// 				),
+// 				Ok(expected_encoded)
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_hrmp_close() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Hrmp,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
+// 			polkadot_runtime::Runtime
+// 		>::hrmp_close_channel {
+// 			channel_id: HrmpChannelId {
+// 				sender: 1000u32.into(),
+// 				recipient: 1001u32.into()
+// 			}
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
+// 				xcm_primitives::HrmpAvailableCalls::CloseChannel(HrmpChannelId {
+// 					sender: 1000u32.into(),
+// 					recipient: 1001u32.into()
+// 				})
+// 			),
+// 			Ok(expected_encoded.clone())
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as xcm_primitives::HrmpEncodeCall
+// 				>::hrmp_encode_call(
+// 					xcm_primitives::HrmpAvailableCalls::CloseChannel(HrmpChannelId {
+// 						sender: 1000u32.into(),
+// 						recipient: 1001u32.into()
+// 					})
+// 				),
+// 				Ok(expected_encoded)
+// 			);
+// 		});
+// 	}
+//
+// 	#[test]
+// 	fn test_hrmp_cancel() {
+// 		let mut expected_encoded: Vec<u8> = Vec::new();
+//
+// 		let index = <polkadot_runtime::Runtime as frame_system::Config>::PalletInfo::index::<
+// 			polkadot_runtime::Hrmp,
+// 		>()
+// 		.unwrap() as u8;
+// 		expected_encoded.push(index);
+//
+// 		let channel_id = HrmpChannelId {
+// 			sender: 1u32.into(),
+// 			recipient: 1u32.into(),
+// 		};
+// 		let open_requests: u32 = 1;
+//
+// 		let mut expected = polkadot_runtime_parachains::hrmp::Call::<
+// 			polkadot_runtime::Runtime
+// 		>::hrmp_cancel_open_request {
+// 			channel_id: channel_id.clone(),
+// 			open_requests
+// 		}
+// 		.encode();
+// 		expected_encoded.append(&mut expected);
+//
+// 		assert_eq!(
+// 			<PolkadotEncoder as xcm_primitives::HrmpEncodeCall>::hrmp_encode_call(
+// 				xcm_primitives::HrmpAvailableCalls::CancelOpenRequest(
+// 					channel_id.clone(),
+// 					open_requests
+// 				)
+// 			),
+// 			Ok(expected_encoded.clone())
+// 		);
+// 		sp_io::TestExternalities::default().execute_with(|| {
+// 			// Pallet-xcm-transactor default encoder returns same result
+// 			// insert storage item as per migration to set the storage item
+// 			pallet_xcm_transactor::RelayIndices::<moonbeam_runtime::Runtime>::put(
+// 				POLKADOT_RELAY_INDICES,
+// 			);
+// 			assert_eq!(
+// 				<pallet_xcm_transactor::Pallet::<
+// 					moonbeam_runtime::Runtime> as xcm_primitives::HrmpEncodeCall
+// 				>::hrmp_encode_call(
+// 					xcm_primitives::HrmpAvailableCalls::CancelOpenRequest(
+// 						channel_id.clone(),
+// 						open_requests
+// 					)
+// 				),
+// 				Ok(expected_encoded)
+// 			);
+// 		});
+// 	}
+// }

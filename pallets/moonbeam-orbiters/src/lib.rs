@@ -162,7 +162,6 @@ pub mod pallet {
 		pub min_orbiter_deposit: BalanceOf<T>,
 	}
 
-	#[cfg(feature = "std")]
 	impl<T: Config> Default for GenesisConfig<T> {
 		fn default() -> Self {
 			Self {
@@ -172,7 +171,7 @@ pub mod pallet {
 	}
 
 	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+	impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 		fn build(&self) {
 			assert!(
 				self.min_orbiter_deposit > Zero::zero(),
@@ -184,7 +183,7 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		fn on_initialize(_: T::BlockNumber) -> Weight {
+		fn on_initialize(_: BlockNumberFor<T>) -> Weight {
 			// Prune old OrbiterPerRound entries
 			if let Some(round_to_prune) =
 				CurrentRound::<T>::get().checked_sub(&T::MaxRoundArchive::get())
@@ -556,8 +555,12 @@ pub mod pallet {
 			}
 		}
 
-		/// Check if an account is an orbiter account for a given round
-		pub fn is_orbiter(for_round: T::RoundIndex, collator: T::AccountId) -> bool {
+		/// Check if an account is a collator pool account with an
+		/// orbiter assigned for a given round
+		pub fn is_collator_pool_with_active_orbiter(
+			for_round: T::RoundIndex,
+			collator: T::AccountId,
+		) -> bool {
 			OrbiterPerRound::<T>::contains_key(for_round, &collator)
 		}
 	}

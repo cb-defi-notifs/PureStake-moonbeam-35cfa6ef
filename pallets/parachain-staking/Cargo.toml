@@ -7,7 +7,7 @@ version = "3.0.0"
 
 [dependencies]
 log = { workspace = true }
-serde = { workspace = true, optional = true }
+serde = { workspace = true }
 
 # Substrate
 frame-benchmarking = { workspace = true, optional = true }
@@ -15,6 +15,7 @@ frame-support = { workspace = true }
 frame-system = { workspace = true }
 parity-scale-codec = { workspace = true, features = [ "derive" ] }
 scale-info = { workspace = true, features = [ "derive" ] }
+sp-consensus-slots = { workspace = true }
 sp-runtime = { workspace = true }
 sp-std = { workspace = true }
 substrate-fixed = { workspace = true }
@@ -23,10 +24,11 @@ substrate-fixed = { workspace = true }
 nimbus-primitives = { workspace = true }
 
 [dev-dependencies]
-pallet-balances = { workspace = true, features = [ "std" ] }
+pallet-balances = { workspace = true, features = [ "insecure_zero_ed", "std" ] }
 similar-asserts = { workspace = true }
 sp-core = { workspace = true, features = [ "std" ] }
 sp-io = { workspace = true, features = [ "std" ] }
+sp-runtime = { workspace = true }
 
 [features]
 default = [ "std" ]
@@ -37,7 +39,7 @@ std = [
 	"nimbus-primitives/std",
 	"parity-scale-codec/std",
 	"scale-info/std",
-	"serde",
+	"sp-consensus-slots/std",
 	"sp-runtime/std",
 	"sp-std/std",
 ]

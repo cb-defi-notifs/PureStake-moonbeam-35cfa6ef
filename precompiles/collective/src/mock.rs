@@ -16,11 +16,13 @@
 
 //! Test utilities
 use super::*;
+use frame_support::traits::tokens::{PayFromAccount, UnityAssetBalanceConversion};
 use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{ConstU128, Everything, GenesisBuild, MapSuccess, OnFinalize, OnInitialize},
+	traits::{ConstU128, Everything, MapSuccess, OnFinalize, OnInitialize},
 	PalletId,
 };
+use frame_system::pallet_prelude::BlockNumberFor;
 use pallet_evm::{EnsureAddressNever, EnsureAddressRoot, SubstrateBlockHashMapping};
 use precompile_utils::{
 	precompile_set::*,
@@ -30,30 +32,28 @@ use sp_core::{H256, U256};
 use sp_io;
 use sp_runtime::{
 	traits::{BlakeTwo256, IdentityLookup, Replace},
-	Permill,
+	BuildStorage, Permill,
 };
+
+#[cfg(feature = "runtime-benchmarks")]
+use pallet_treasury::ArgumentsFactory;
 
 pub type AccountId = MockAccount;
 pub type Balance = u128;
-pub type BlockNumber = u32;
+pub type BlockNumber = BlockNumberFor<Runtime>;
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Runtime>;
-type Block = frame_system::mocking::MockBlock<Runtime>;
+type Block = frame_system::mocking::MockBlockU32<Runtime>;
 
 // Configure a mock runtime to test the pallet.
 construct_runtime!(
-	pub enum Runtime where
-		Block = Block,
-		NodeBlock = Block,
-		UncheckedExtrinsic = UncheckedExtrinsic,
-	{
-		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
-		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
-		Evm: pallet_evm::{Pallet, Config, Call, Storage, Event<T>},
-		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
-		Treasury: pallet_treasury::{Pallet, Storage, Config, Event<T>, Call},
+	pub enum Runtime	{
+		System: frame_system,
+		Balances: pallet_balances,
+		Evm: pallet_evm,
+		Timestamp: pallet_timestamp,
+		Treasury: pallet_treasury,
 		CouncilCollective:
-			pallet_collective::<Instance1>::{Pallet, Call, Storage, Event<T>, Origin<T>, Config<T>},
+			pallet_collective::<Instance1>,
 	}
 );
 
@@ -65,14 +65,14 @@ impl frame_system::Config for Runtime {
 	type BaseCallFilter = Everything;
 	type DbWeight = ();
 	type RuntimeOrigin = RuntimeOrigin;
-	type Index = u64;
-	type BlockNumber = BlockNumber;
+	type RuntimeTask = RuntimeTask;
+	type Nonce = u64;
+	type Block = Block;
 	type RuntimeCall = RuntimeCall;
 	type Hash = H256;
 	type Hashing = BlakeTwo256;
 	type AccountId = AccountId;
 	type Lookup = IdentityLookup<Self::AccountId>;
-	type Header = sp_runtime::generic::Header<BlockNumber, BlakeTwo256>;
 	type RuntimeEvent = RuntimeEvent;
 	type BlockHashCount = BlockHashCount;
 	type Version = ();
@@ -102,6 +102,10 @@ impl pallet_balances::Config for Runtime {
 	type ExistentialDeposit = ExistentialDeposit;
 	type AccountStore = System;
 	type WeightInfo = ();
+	type RuntimeHoldReason = ();
+	type FreezeIdentifier = ();
+	type MaxFreezes = ();
+	type RuntimeFreezeReason = ();
 }
 
 pub type Precompiles<R> = PrecompileSetBuilder<
@@ -112,6 +116,8 @@ pub type Precompiles<R> = PrecompileSetBuilder<
 pub type PCall = CollectivePrecompileCall<Runtime, pallet_collective::Instance1>;
 
 const MAX_POV_SIZE: u64 = 5 * 1024 * 1024;
+/// Block storage limit in bytes. Set to 40 KB.
+const BLOCK_STORAGE_LIMIT: u64 = 40 * 1024;
 
 parameter_types! {
 	pub BlockGasLimit: U256 = U256::from(u64::MAX);
@@ -120,6 +126,10 @@ parameter_types! {
 	pub GasLimitPovSizeRatio: u64 = {
 		let block_gas_limit = BlockGasLimit::get().min(u64::MAX.into()).low_u64();
 		block_gas_limit.saturating_div(MAX_POV_SIZE)
+	};
+	pub GasLimitStorageGrowthRatio : u64 = {
+		let block_gas_limit = BlockGasLimit::get().min(u64::MAX.into()).low_u64();
+		block_gas_limit.saturating_div(BLOCK_STORAGE_LIMIT)
 	};
 }
 
@@ -142,6 +152,8 @@ impl pallet_evm::Config for Runtime {
 	type FindAuthor = ();
 	type OnCreate = ();
 	type GasLimitPovSizeRatio = GasLimitPovSizeRatio;
+	type SuicideQuickClearLimit = ConstU32<0>;
+	type GasLimitStorageGrowthRatio = GasLimitStorageGrowthRatio;
 	type Timestamp = Timestamp;
 	type WeightInfo = pallet_evm::weights::SubstrateWeight<Runtime>;
 }
@@ -173,6 +185,20 @@ parameter_types! {
 parameter_types! {
 	pub const ProposalBond: Permill = Permill::from_percent(5);
 	pub const TreasuryId: PalletId = PalletId(*b"pc/trsry");
+	pub TreasuryAccount: AccountId = Treasury::account_id();
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchmarkHelper;
+#[cfg(feature = "runtime-benchmarks")]
+impl ArgumentsFactory<(), AccountId> for BenchmarkHelper {
+	fn create_asset_kind(_seed: u32) -> () {
+		()
+	}
+
+	fn create_beneficiary(seed: [u8; 32]) -> AccountId {
+		AccountId::from(H160::from(H256::from(seed)))
+	}
 }
 
 impl pallet_treasury::Config for Runtime {
@@ -196,6 +222,18 @@ impl pallet_treasury::Config for Runtime {
 		pallet_collective::EnsureProportionMoreThan<AccountId, pallet_collective::Instance1, 1, 2>,
 		Replace<ConstU128<1000>>,
 	>;
+	type AssetKind = ();
+	type Beneficiary = AccountId;
+	type BeneficiaryLookup = IdentityLookup<AccountId>;
+	type Paymaster = PayFromAccount<Balances, TreasuryAccount>;
+	type BalanceConverter = UnityAssetBalanceConversion;
+	type PayoutPeriod = ConstU32<0>;
+	#[cfg(feature = "runtime-benchmarks")]
+	type BenchmarkHelper = BenchmarkHelper;
+}
+
+parameter_types! {
+	pub MaxProposalWeight: Weight = Weight::from_parts(1_000_000_000, 1_000_000_000);
 }
 
 impl pallet_collective::Config<pallet_collective::Instance1> for Runtime {
@@ -212,6 +250,7 @@ impl pallet_collective::Config<pallet_collective::Instance1> for Runtime {
 	type DefaultVote = pallet_collective::MoreThanMajorityThenPrimeDefaultVote;
 	type WeightInfo = pallet_collective::weights::SubstrateWeight<Runtime>;
 	type SetMembersOrigin = frame_system::EnsureRoot<AccountId>;
+	type MaxProposalWeight = MaxProposalWeight;
 }
 
 /// Build test externalities, prepopulated with data for testing democracy precompiles
@@ -249,8 +288,8 @@ impl ExtBuilder {
 	/// Build the test externalities for use in tests
 	#[allow(unused)]
 	pub(crate) fn build(self) -> sp_io::TestExternalities {
-		let mut t = frame_system::GenesisConfig::default()
-			.build_storage::<Runtime>()
+		let mut t = frame_system::GenesisConfig::<Runtime>::default()
+			.build_storage()
 			.expect("Frame system builds valid default genesis config");
 
 		pallet_balances::GenesisConfig::<Runtime> {
@@ -280,7 +319,6 @@ pub(crate) fn roll_to(n: BlockNumber) {
 	// We may be able to simulate this by poking its storage directly, but I don't see any value
 	// added from doing that.
 	while System::block_number() < n {
-		CouncilCollective::on_finalize(System::block_number());
 		Treasury::on_finalize(System::block_number());
 		// Times tamp::on_finalize(System::block_number());
 		Evm::on_finalize(System::block_number());
@@ -294,7 +332,6 @@ pub(crate) fn roll_to(n: BlockNumber) {
 		Evm::on_initialize(System::block_number());
 		Timestamp::on_initialize(System::block_number());
 		Treasury::on_initialize(System::block_number());
-		CouncilCollective::on_initialize(System::block_number());
 	}
 }
 

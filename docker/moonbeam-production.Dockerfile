@@ -8,11 +8,13 @@ FROM docker.io/library/ubuntu:20.04 AS builder
 ARG COMMIT="master"
 ARG RUSTFLAGS=""
 ENV RUSTFLAGS=$RUSTFLAGS
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /
 
 RUN echo "*** Installing Basic dependencies ***"
 RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
-RUN apt install --assume-yes git clang curl libssl-dev llvm libudev-dev make protobuf-compiler
+RUN apt install --assume-yes git clang curl libssl-dev llvm libudev-dev make protobuf-compiler pkg-config
 
 RUN set -e
 
@@ -50,10 +52,9 @@ RUN chmod uog+x /moonbeam/moonbeam
 
 # 30333 for parachain p2p
 # 30334 for relaychain p2p
-# 9933 for RPC call
-# 9944 for Websocket
+# 9944 for Websocket & RPC call
 # 9615 for Prometheus (metrics)
-EXPOSE 30333 30334 9933 9944 9615
+EXPOSE 30333 30334 9944 9615
 
 VOLUME ["/data"]
 

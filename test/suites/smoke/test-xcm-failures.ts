@@ -1,12 +1,17 @@
 import "@moonbeam-network/api-augment/moonbase";
 import { rateLimiter, checkTimeSliceForUpgrades } from "../../helpers/common.js";
 import { FrameSystemEventRecord, XcmV3MultiLocation } from "@polkadot/types/lookup";
-import { isMuted } from "../../helpers/foreign-chains.js";
+import {
+  MoonbeamNetworkName,
+  ParaId,
+  isMuted,
+  ForeignChainsEndpoints,
+} from "../../helpers/foreign-chains.js";
 import { describeSuite, expect, beforeAll } from "@moonwall/cli";
-import { getBlockArray, FIVE_MINS, THIRTY_MINS } from "@moonwall/util";
+import { getBlockArray, FIVE_MINS, ONE_HOURS } from "@moonwall/util";
 import { ApiPromise } from "@polkadot/api";
 
-const timePeriod = process.env.TIME_PERIOD ? Number(process.env.TIME_PERIOD) : THIRTY_MINS;
+const timePeriod = process.env.TIME_PERIOD ? Number(process.env.TIME_PERIOD) : ONE_HOURS;
 const atBlock = process.env.AT_BLOCK ? Number(process.env.AT_BLOCK) : -1;
 const timeout = Math.max(Math.floor(timePeriod / 12), 5000);
 const limiter = rateLimiter();
@@ -17,32 +22,34 @@ type BlockEventsRecord = {
 };
 
 describeSuite({
-  id: "S2300",
+  id: "S25",
   title:
     `XCM Failures in past ${(timePeriod / (1000 * 60 * 60)).toFixed(2)} hours` +
     ` should not be serious`,
   foundationMethods: "read_only",
   testCases: ({ context, it, log }) => {
     let blockEvents: BlockEventsRecord[];
-    let chainName: string;
+    let chainName: MoonbeamNetworkName;
     let paraApi: ApiPromise;
     let relayApi: ApiPromise;
-    let skip: boolean = false;
+    let isUpgrading: boolean;
+    let aboveRt2900: boolean;
+    let networkSkip: boolean;
 
     const isMutedChain = (events: FrameSystemEventRecord[], index: number) => {
       let muted = false;
       if (paraApi.events.polkadotXcm.AssetsTrapped.is(events[Math.max(0, index - 1)].event)) {
         const { interior } = events[index - 1].event.data[1] as XcmV3MultiLocation;
         if (interior.isX1) {
-          muted = isMuted(chainName, interior.asX1.asParachain.toNumber());
+          muted = !!isMuted(chainName, interior.asX1.asParachain.toNumber() as ParaId);
         }
       }
       return muted;
     };
 
     beforeAll(async function () {
-      paraApi = context.polkadotJs({ apiName: "para" });
-      relayApi = context.polkadotJs({ apiName: "relay" });
+      paraApi = context.polkadotJs("para");
+      relayApi = context.polkadotJs("relay");
 
       const blockNumArray = atBlock > 0 ? [atBlock] : await getBlockArray(paraApi, timePeriod);
 
@@ -52,12 +59,28 @@ describeSuite({
         blockNumArray,
         paraApi.consts.system.version.specVersion
       );
+
+      // PolkadotSDK 1.7.2 removes XCM errors, so we can skip these tests
+      aboveRt2900 = onChainRt.toNumber() >= 2900 ? true : false;
+
       if (result) {
-        log(`Time slice of blocks intersects with upgrade from RT ${onChainRt}, skipping tests.`);
-        skip = true;
+        log(
+          `Time slice of blocks intersects with upgrade from RT ${onChainRt}, skipping all tests.`
+        );
+        isUpgrading = true;
+        return;
       }
 
-      chainName = (await paraApi.rpc.system.chain()).toString();
+      const chainQuery = (await paraApi.rpc.system.chain()).toString();
+
+      if (!ForeignChainsEndpoints.find((chain) => chain.moonbeamNetworkName === chainQuery)) {
+        log(
+          `Non-prod chains have unreliable channels, skipping HRMP monitoring for ${chainQuery}.`
+        );
+        networkSkip = true;
+      }
+
+      chainName = (await paraApi.rpc.system.chain()).toString() as MoonbeamNetworkName;
 
       const getEvents = async (blockNum: number) => {
         const blockHash = await paraApi.rpc.chain.getBlockHash(blockNum);
@@ -73,10 +96,10 @@ describeSuite({
 
     it({
       id: "C100",
-      title: "should not have UnsupportedVersion errors on DMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      title: "should not have UnsupportedVersion errors on cumulusXcm queue",
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const dmpQueueEvents = events.filter(
@@ -100,9 +123,9 @@ describeSuite({
     it({
       id: "C200",
       title: "should not have BadVersion errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events.filter(
@@ -124,9 +147,9 @@ describeSuite({
     it({
       id: "C300",
       title: "should not have Barrier errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -150,9 +173,9 @@ describeSuite({
     it({
       id: "C400",
       title: "should not have Overflow errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -176,9 +199,9 @@ describeSuite({
     it({
       id: "C500",
       title: "should not have MultiLocationFull errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -206,9 +229,9 @@ describeSuite({
     it({
       id: "C600",
       title: "should not have AssetNotFound errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -234,9 +257,9 @@ describeSuite({
     it({
       id: "C700",
       title: "should not have DestinationUnsupported errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -264,9 +287,9 @@ describeSuite({
     it({
       id: "C800",
       title: "should not have Transport errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -290,9 +313,9 @@ describeSuite({
     it({
       id: "C900",
       title: "should not have FailedToDecode errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -318,9 +341,9 @@ describeSuite({
     it({
       id: "C1000",
       title: "should not have UnhandledXcmVersion errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -348,9 +371,9 @@ describeSuite({
     it({
       id: "C1100",
       title: "should not have WeightNotComputable errors on XCMP queue",
-      test: async function () {
-        if (skip) {
-          return;
+      test: async function (context) {
+        if (isUpgrading || aboveRt2900) {
+          context.skip();
         }
         const filteredEvents = blockEvents.map(({ blockNum, events }) => {
           const xcmpQueueEvents = events
@@ -379,22 +402,18 @@ describeSuite({
       id: "C1200",
       title: "should have recent responses for opened HMRP channels",
       timeout: FIVE_MINS,
-      test: async function () {
-        if (skip) {
-          return;
-        }
-        if (chainName !== "Moonbeam" && chainName !== "Moonriver") {
-          log(`Non-prod chains have unreliable channels, skipping test for ${chainName}.`);
-          return; // TODO: replace this with skip() when added to vitest
+      test: async function (context) {
+        if (isUpgrading || networkSkip) {
+          context.skip();
         }
 
         const paraId = await paraApi.query.parachainInfo.parachainId();
         const inChannels = (
           (await relayApi.query.hrmp.hrmpIngressChannelsIndex(paraId)) as any
-        ).map((a) => a.toNumber());
+        ).map((a: any) => a.toNumber());
         const outChannels = (
           (await relayApi.query.hrmp.hrmpIngressChannelsIndex(paraId)) as any
-        ).map((a) => a.toNumber());
+        ).map((a: any) => a.toNumber());
         const channels = [...new Set([...inChannels, ...outChannels])];
 
         const fiveMinutesOfBlocks = await getBlockArray(relayApi, FIVE_MINS);
@@ -440,6 +459,67 @@ describeSuite({
           `Open channels exist with unresponsive chains: ${failedResponses
             .map((a) => a.channel)
             .join(`, `)}; please investigate.`
+        ).to.equal(0);
+      },
+    });
+
+    it({
+      id: "C1300",
+      title: "should not have OverweightEnqueued errors on message queue",
+      minRtVersion: 2900,
+      test: async function (context) {
+        if (isUpgrading || !aboveRt2900) {
+          context.skip();
+        }
+        const filteredEvents = blockEvents.map(({ blockNum, events }) => {
+          const messageQueueEvents = events
+            .filter(
+              ({ event }, idx) =>
+                paraApi.events.messageQueue.OverweightEnqueued.is(event) &&
+                !isMutedChain(events, idx)
+            )
+            .filter(
+              ({ event: { data } }) => (data as any).error.toString() === "OverweightEnqueued"
+            );
+          return { blockNum, messageQueueEvents };
+        });
+
+        const failures = filteredEvents.filter((a) => a.messageQueueEvents.length !== 0);
+        failures.forEach((a) =>
+          log(`XCM OverweightEnqueued error messageQueue in block #${a.blockNum}.`)
+        );
+        expect(
+          failures.length,
+          `XCM errors in blocks ${failures.map((a) => a.blockNum).join(`, `)}; please investigate.`
+        ).to.equal(0);
+      },
+    });
+
+    it({
+      id: "C1400",
+      title: "should not have ProcessingFailed errors on message queue",
+      minRtVersion: 2900,
+      test: async function (context) {
+        if (isUpgrading || !aboveRt2900) {
+          context.skip();
+        }
+        const filteredEvents = blockEvents.map(({ blockNum, events }) => {
+          const messageQueueEvents = events
+            .filter(
+              ({ event }, idx) =>
+                paraApi.events.messageQueue.ProcessingFailed.is(event) && !isMutedChain(events, idx)
+            )
+            .filter(({ event: { data } }) => (data as any).error.toString() === "ProcessingFailed");
+          return { blockNum, messageQueueEvents };
+        });
+
+        const failures = filteredEvents.filter((a) => a.messageQueueEvents.length !== 0);
+        failures.forEach((a) =>
+          log(`XCM ProcessingFailed error messageQueue in block #${a.blockNum}.`)
+        );
+        expect(
+          failures.length,
+          `XCM errors in blocks ${failures.map((a) => a.blockNum).join(`, `)}; please investigate.`
         ).to.equal(0);
       },
     });
